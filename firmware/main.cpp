@@ -24,7 +24,7 @@ enum StorageStatus : uint8_t
 };
 
 Hardware hardware;
-#if !defined(AURORA_DIAGNOSTIC)
+#if !defined(AURORA_DIAGNOSTIC) || AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11
 // USB loop persistence is parked for later experimentation; keep all USB
 // storage access disabled in the normal firmware.
 constexpr bool usbPersistenceEnabled = false;
@@ -62,6 +62,24 @@ uint32_t storage_activity_led_until = 0;
 bool storage_activity_led_on = false;
 uint32_t loop_end_pulse_until[2]{};
 char loopFilePath[16]{};
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 10
+volatile bool playback_discontinuity_seen = false;
+float playback_previous[2]{};
+float playback_previous_previous[2]{};
+uint8_t playback_history_samples = 0;
+#endif
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 11
+float record_reference_left[maxLoopSamples] DSY_SDRAM_BSS;
+float record_reference_right[maxLoopSamples] DSY_SDRAM_BSS;
+volatile bool record_audit_active = false;
+volatile bool record_audit_complete = false;
+volatile bool record_audit_failed = false;
+std::size_t record_reference_samples = 0;
+std::size_t record_audit_samples = 0;
+std::size_t record_audit_index = 0;
+bool record_reference_left_active = false;
+bool record_reference_right_active = false;
+#endif
 #endif
 #if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC > 0
 volatile bool audio_callback_seen = false;
@@ -156,7 +174,7 @@ bool TestAndClearSdram()
 }
 #endif
 
-#if !defined(AURORA_DIAGNOSTIC)
+#if !defined(AURORA_DIAGNOSTIC) || AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11
 using ControlState = aurora::dsp::KarmaControlState;
 using LooperParameters = aurora::dsp::StereoLooper::ChannelParameters;
 
@@ -202,11 +220,25 @@ LooperParameters MakeLooperParameters(std::size_t channel,
                      : ControlState::MapBlurSpeed(
                            controls.controls[ControlState::Blur]);
     parameters.mix = controls.controls[ControlState::Mix];
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 11
+    parameters.start = 0.0f;
+    parameters.length = fullLength
+                      ? 1.0f
+                      : static_cast<float>(workingLoopSamples)
+                            / static_cast<float>(maxLoopSamples);
+    parameters.speed = 1.0f;
+#endif
     parameters.pan = controls.pan;
     parameters.reflect = controls.controls[ControlState::Reflect];
     parameters.reflectMix = controls.crushMix;
     parameters.atmosphere = controls.controls[ControlState::Atmosphere];
     parameters.glitchDuration = controls.glitchDuration;
+#if defined(AURORA_DIAGNOSTIC) && (AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11)
+    parameters.mix = 1.0f;
+    parameters.reflect = 0.0f;
+    parameters.reflectMix = 0.0f;
+    parameters.atmosphere = 0.0f;
+#endif
     parameters.record = active && record && !clearAll;
     parameters.recordFromStart = active && fullLength;
     parameters.finishRecordAtFullWindow = finishCapturedWindow;
@@ -550,7 +582,7 @@ void AudioCallback(AudioHandle::InputBuffer input,
                    AudioHandle::OutputBuffer output,
                    size_t frameCount)
 {
-#if !defined(AURORA_DIAGNOSTIC)
+#if !defined(AURORA_DIAGNOSTIC) || AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11
     if (storage_io_busy)
     {
         storage_audio_quiesced = true;
@@ -681,6 +713,37 @@ void AudioCallback(AudioHandle::InputBuffer input,
                                                        shiftRecordActive
                                                            || emptyBufferRecordActive,
                                                        finishCapturedWindow);
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 11
+    if (emptyBufferRecordActive && !wasEmptyBufferRecord)
+    {
+        record_reference_samples = 0;
+        record_audit_samples = 0;
+        record_audit_index = 0;
+        record_audit_active = false;
+        record_audit_complete = false;
+        record_audit_failed = false;
+        record_reference_left_active = leftActive;
+        record_reference_right_active = rightActive;
+    }
+    if (emptyBufferRecordActive)
+    {
+        for (size_t frame = 0;
+             frame < frameCount && record_reference_samples < maxLoopSamples;
+             ++frame, ++record_reference_samples)
+        {
+            record_reference_left[record_reference_samples] = input[0][frame];
+            record_reference_right[record_reference_samples] = input[1][frame];
+        }
+    }
+    if (wasEmptyBufferRecord && !emptyBufferRecordActive)
+    {
+        record_audit_samples = workingLoopSamples;
+        record_audit_index = 0;
+        record_audit_active = record_audit_samples > 0;
+        record_audit_complete = false;
+        record_audit_failed = record_reference_samples != record_audit_samples;
+    }
+#endif
     looper.ProcessBlock(input[0],
                         input[1],
                         output[0],
@@ -701,6 +764,56 @@ void AudioCallback(AudioHandle::InputBuffer input,
     recording_status = looper.IsRecording();
     erasing_status = looper.IsErasing();
     clearing_status = looper.IsClearing();
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 11
+    if (record_audit_active)
+    {
+        const std::size_t remaining = record_audit_samples - record_audit_index;
+        const std::size_t framesToCheck = frameCount < remaining
+                                        ? frameCount
+                                        : remaining;
+        for (std::size_t offset = 0; offset < framesToCheck; ++offset)
+        {
+            const std::size_t index = record_audit_index + offset;
+            if ((record_reference_left_active
+                 && loopBufferLeft[index] != record_reference_left[index])
+                || (record_reference_right_active
+                    && loopBufferRight[index] != record_reference_right[index]))
+                record_audit_failed = true;
+        }
+        record_audit_index += framesToCheck;
+        if (record_audit_index == record_audit_samples)
+        {
+            record_audit_active = false;
+            record_audit_complete = true;
+        }
+    }
+#endif
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 10
+    if (!looper.IsRecording() && !looper.IsErasing() && !looper.IsClearing())
+    {
+        bool discontinuityDetected = false;
+        for (size_t frame = 0; frame < frameCount; ++frame)
+        {
+            const float current[2] = {output[0][frame], output[1][frame]};
+            for (size_t channel = 0; channel < 2; ++channel)
+            {
+                if (playback_history_samples >= 2
+                    && std::fabs(current[channel]
+                                  - 2.0f * playback_previous[channel]
+                                  + playback_previous_previous[channel]) > 0.25f)
+                    discontinuityDetected = true;
+                playback_previous_previous[channel] = playback_previous[channel];
+                playback_previous[channel] = current[channel];
+            }
+            if (playback_history_samples < 2)
+                ++playback_history_samples;
+        }
+        if (discontinuityDetected)
+            playback_discontinuity_seen = true;
+    }
+    else
+        playback_history_samples = 0;
+#endif
 #elif defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 1
     audio_callback_seen = true;
     constexpr float input_activity_threshold = 0.01f;
@@ -784,7 +897,7 @@ void AudioCallback(AudioHandle::InputBuffer input,
 int main(void)
 {
     hardware.Init();
-#if !defined(AURORA_DIAGNOSTIC)
+#if !defined(AURORA_DIAGNOSTIC) || AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11
     if (hardware.seed.sdram_handle.Init() != SdramHandle::Result::OK
         || !looper.Initialize(loopBufferLeft,
                               loopBufferRight,
@@ -816,7 +929,7 @@ int main(void)
 
     while (1)
     {
-#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC > 0
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC > 0 && AURORA_DIAGNOSTIC != 10 && AURORA_DIAGNOSTIC != 11
 #if AURORA_DIAGNOSTIC == 9
         usb.Process();
         const uint32_t now = HAL_GetTick();
@@ -879,6 +992,14 @@ int main(void)
         System::Delay(250);
 #endif
 #else
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 10
+        static uint32_t discontinuityLedUntil = 0;
+        if (playback_discontinuity_seen)
+        {
+            playback_discontinuity_seen = false;
+            discontinuityLedUntil = HAL_GetTick() + 120;
+        }
+#endif
         if (usbPersistenceEnabled)
         {
             usb.Process();
@@ -889,10 +1010,25 @@ int main(void)
                         recording_status ? 1.0f : 0.0f,
                         0.0f,
                         0.0f);
+#if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 10
+        const bool discontinuityLedOn = HAL_GetTick() < discontinuityLedUntil;
+        hardware.SetLed(LED_FREEZE,
+                        discontinuityLedOn ? 1.0f : 0.0f,
+                        discontinuityLedOn ? 0.0f : 1.0f,
+                        0.0f);
+#elif defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 11
+        const bool auditFailed = record_audit_failed;
+        const bool auditFinished = record_audit_complete;
+        hardware.SetLed(LED_FREEZE,
+                        auditFailed ? 1.0f : 0.0f,
+                        auditFinished && !auditFailed ? 1.0f : 0.0f,
+                        record_audit_active || !auditFinished ? 1.0f : 0.0f);
+#else
         hardware.SetLed(LED_FREEZE,
                         clearing_status ? 1.0f : 0.0f,
                         0.0f,
                         erasing_status || clearing_status ? 1.0f : 0.0f);
+#endif
         hardware.WriteLeds();
         System::Delay(20);
 #endif

@@ -24,6 +24,10 @@ else ifeq ($(DIAGNOSTIC),8)
 DIAGNOSTIC_BUILD_DIR := build-diagnostic-controls-cv
 else ifeq ($(DIAGNOSTIC),9)
 DIAGNOSTIC_BUILD_DIR := build-diagnostic-usb
+else ifeq ($(DIAGNOSTIC),10)
+DIAGNOSTIC_BUILD_DIR := build-diagnostic-playback
+else ifeq ($(DIAGNOSTIC),11)
+DIAGNOSTIC_BUILD_DIR := build-diagnostic-record-audit
 endif
 
 .PHONY: all vst aurora libdaisy test clean

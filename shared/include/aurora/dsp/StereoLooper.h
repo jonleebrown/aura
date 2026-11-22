@@ -120,7 +120,7 @@ class StereoLooper
             auto& state = channels_[channel];
             state.phase = 0.0f;
             state.recordStartPhase = 0.0f;
-            state.writePhase = 0.0f;
+            state.writePosition = 0.0;
             state.currentStart = 0.0f;
             state.currentLength = 0.0f;
             state.currentRegionLength = 0.0f;
@@ -261,7 +261,7 @@ class StereoLooper
     {
         float phase = 0.0f;
         float recordStartPhase = 0.0f;
-        float writePhase = 0.0f;
+        double writePosition = 0.0;
         float currentStart = 0.0f;
         float currentLength = 0.0f;
         float currentRegionLength = 0.0f;
@@ -324,7 +324,7 @@ class StereoLooper
         return frames > 0 ? frames : 1;
     }
 
-    static float WrapPosition(float position, float regionLength)
+    static double WrapPosition(double position, double regionLength)
     {
         position -= std::floor(position / regionLength) * regionLength;
         return position < 0.0f ? position + regionLength : position;
@@ -450,7 +450,8 @@ class StereoLooper
             if (parameters.record)
             {
                 state.recordStartPhase = parameters.recordFromStart ? 0.0f : state.phase;
-                state.writePhase = state.recordStartPhase;
+                state.writePosition = static_cast<double>(state.recordStartPhase)
+                                    * state.currentLength;
                 state.phase = state.recordStartPhase;
                 state.hasWrapped = false;
                 state.playbackWrapped = false;
@@ -461,7 +462,8 @@ class StereoLooper
                 state.phase = state.recordingFromStart
                             ? 0.0f
                             : state.hasWrapped
-                            ? state.writePhase
+                            ? static_cast<float>(state.writePosition
+                                                 / state.currentLength)
                             : state.recordStartPhase;
                 state.recordingFromStart = false;
             }
@@ -475,7 +477,7 @@ class StereoLooper
             state.currentLength = targetLength;
             state.currentRegionLength = targetRegionLength;
             state.recordStartPhase = 0.0f;
-            state.writePhase = 0.0f;
+            state.writePosition = 0.0;
             state.phase = 0.0f;
             state.hasWrapped = false;
             state.playbackWrapped = false;
@@ -539,19 +541,21 @@ class StereoLooper
             {
                 const auto regionFrames = RegionFrameCount(
                     state.currentRegionLength);
-                const auto index = static_cast<std::size_t>(WrapPosition(
-                    state.currentStart + state.writePhase * state.currentLength,
-                    static_cast<float>(regionFrames)));
+                const double position = WrapPosition(
+                    static_cast<double>(state.currentStart) + state.writePosition,
+                    static_cast<double>(regionFrames));
+                const auto index = static_cast<std::size_t>(position);
                 buffer[index] = input;
                 MarkDirty(state, index, index + 1);
                 const float speed = parameters.speed;
                 if (speed != 0.0f)
                 {
-                    const float next = state.writePhase
-                                     + speed / state.currentLength;
-                    state.hasWrapped = state.hasWrapped
-                                    || next < 0.0f || next >= 1.0f;
-                    state.writePhase = WrapPhase(next);
+                    const double next = state.writePosition + speed;
+                    state.hasWrapped = state.hasWrapped || next < 0.0
+                                    || next >= state.currentLength;
+                    state.writePosition = WrapPosition(
+                        next,
+                        static_cast<double>(state.currentLength));
                 }
             }
             else
@@ -623,7 +627,7 @@ class StereoLooper
             state.clearing = false;
             state.clearProgress = 0;
             state.phase = 0.0f;
-            state.writePhase = 0.0f;
+            state.writePosition = 0.0;
             state.hasWrapped = false;
             state.playbackWrapped = false;
             clearCompleted_ = true;

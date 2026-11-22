@@ -3,7 +3,7 @@ APP_TYPE = BOOT_SRAM
 CPP_SOURCES = main.cpp
 C_SOURCES += $(AURORA_SDK_DIR)/libs/libDaisy/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
 
-ifneq ($(filter 1 2 3 5 6 7 8 9,$(DIAGNOSTIC)),)
+ifneq ($(filter 1 2 3 5 6 7 8 9 10 11,$(DIAGNOSTIC)),)
 C_DEFS += -DAURORA_DIAGNOSTIC=$(DIAGNOSTIC)
 endif
 

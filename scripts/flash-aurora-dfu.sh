@@ -14,8 +14,10 @@ case "${DIAGNOSTIC:-0}" in
     7) firmware_build_dir="build-diagnostic-sdram" ;;
     8) firmware_build_dir="build-diagnostic-controls-cv" ;;
     9) firmware_build_dir="build-diagnostic-usb" ;;
+    10) firmware_build_dir="build-diagnostic-playback" ;;
+    11) firmware_build_dir="build-diagnostic-record-audit" ;;
     *)
-        echo "DIAGNOSTIC must be 0 (Karma looper), 1, 2, 3, 5, 6, 7 (SDRAM test), 8, or 9." >&2
+        echo "DIAGNOSTIC must be 0 (Karma looper), 1, 2, 3, 5, 6, 7 (SDRAM test), 8, 9, 10 (playback), or 11 (record audit)." >&2
         exit 2
         ;;
 esac

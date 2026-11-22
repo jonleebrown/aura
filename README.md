@@ -110,7 +110,10 @@ pending more level-matched hardware testing, since the user also likes the
 possibility of intentionally overdriving the sound. This character is not
 enabled intentionally; keep Reflect's blend at zero and Atmosphere fully
 counter-clockwise to hear the clean path. Root-cause diagnosis is deferred
-until after playback behavior is stable.
+until after playback behavior is stable. A more recent observation isolates
+the crackles to loop playback: the analog oscillator passes cleanly, and the
+crackles recur at the same recorded positions across takes. Diagnostic 10
+targets the playback output without changing it.
 
 Tap **Shift** (hold for less than 300 ms, without changing a secondary control)
 to cycle modes. The firmware starts in LR to retain Phase 1 stereo behavior;
@@ -154,9 +157,37 @@ DIAGNOSTIC=8 ./scripts/flash-aurora-dfu.sh
 
 # USB mass-storage presence/readiness (connect a drive to Aurora)
 DIAGNOSTIC=9 ./scripts/flash-aurora-dfu.sh
+
+# Full-wet, effects-off looper playback with a discontinuity LED
+DIAGNOSTIC=10 ./scripts/flash-aurora-dfu.sh
+
+# Compare a first recording against the samples written to the loop buffer
+DIAGNOSTIC=11 ./scripts/flash-aurora-dfu.sh
 ```
 
 Diagnostics 3 and 6 can clip; start with low source and mixer levels.
+Diagnostic 10 is the playback investigation build: record normally, then play
+back at full wet with Reflect and Atmosphere bypassed. Mix is forced fully wet.
+The Freeze LED is normally green and flashes red when the playback output's
+second sample difference exceeds 0.25 (normalized full scale). This marks a
+sharp waveform change, which can be a click or a legitimate sharp transient;
+it does not alter audio or measure callback timing. Use a steady, low-level
+oscillator, Warp fully counter-clockwise, Time fully clockwise, and Blur near
+1x when comparing the regular and diagnostic builds.
+Diagnostic 11 audits the first recording made into an empty buffer. After
+full-erasing, record the steady oscillator and release Reverse; the build
+stores a reference copy of the input and compares it with the loop buffer's
+sequential samples while playback proceeds. Freeze is blue while waiting or
+auditing, green when every written sample matches the reference, and red if
+any sample differs (including a loop-duration mismatch). It forces full-wet,
+effects-off, 1x playback and uses two additional SDRAM reference buffers. A
+green result means the buffer write matches the captured digital input; it
+does not distinguish an ADC/input artifact from an artifact already present
+in those input samples. The audit exposed precision loss in the normalized
+floating-point recording head at unity speed; the write cursor now advances
+in sample units using double precision. A regression test checks every sample
+in a four-second recording. Hardware testing after flashing the corrected
+build confirmed the playback crackles are gone.
 Diagnostic 7 uses LED 1 green/red for SDRAM pass/fail, and LED 2 blue for
 48-sample blocks, green for 96, or red for another block size. The Freeze LED
 indicates audio callback activity. In diagnostic 8, LED 1 displays Mix knob
@@ -178,6 +209,15 @@ Unplug and reconnect the drive while leaving Aurora powered. The LEDs should
 return to red and then green/green again. If they only change after a restart,
 hot-plug enumeration is not working. This sequence has now been confirmed on
 the target module.
+
+### Build and flash quick start
+
+Build without flashing with `./scripts/build-aurora.sh`. To build and flash the
+normal looper, run `./scripts/flash-aurora-dfu.sh`; for a diagnostic, prefix it
+with its selector, e.g. `DIAGNOSTIC=10` for playback or `DIAGNOSTIC=11` for the
+record audit. To build without flashing, run
+`DIAGNOSTIC=11 ./scripts/build-aurora.sh`. The flash script builds first, then
+waits for the module's Daisy bootloader.
 
 The flash script uses the Daisy bootloader (`0483:df11`), not STM32 ROM DFU.
 Keep the Daisy connected to the computer's USB device port, restart with RESET,

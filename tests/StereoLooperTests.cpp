@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 namespace
 {
@@ -111,6 +112,58 @@ void TestRecordPlaybackAndWrap()
             "wrapped recording begins playback at the oldest sample");
     Require(Near(outputRight[0], -2.0f) && Near(outputRight[2], -4.0f),
             "right playback uses its own recorded samples");
+}
+
+void TestUnitySpeedRecordingPreservesEverySample()
+{
+    constexpr std::size_t capacity = 192000;
+    constexpr std::size_t blockSize = 96;
+    std::vector<float> leftBuffer(capacity, 0.0f);
+    std::vector<float> rightBuffer(capacity, 0.0f);
+    std::vector<float> inputLeft(blockSize);
+    std::vector<float> inputRight(blockSize);
+    std::vector<float> outputLeft(blockSize);
+    std::vector<float> outputRight(blockSize);
+    Looper looper;
+    Require(looper.Initialize(leftBuffer.data(),
+                              rightBuffer.data(),
+                              capacity,
+                              0),
+            "looper initializes for long unity-speed recording");
+
+    Parameters left;
+    left.length = 1.0f;
+    left.regionLength = 1.0f;
+    left.speed = 1.0f;
+    left.mix = 1.0f;
+    left.record = true;
+    left.recordFromStart = true;
+    Parameters right = left;
+    right.pan = 1.0f;
+    for (std::size_t block = 0; block < capacity / blockSize; ++block)
+    {
+        for (std::size_t frame = 0; frame < blockSize; ++frame)
+        {
+            const auto index = block * blockSize + frame;
+            inputLeft[frame] = static_cast<float>((index % 997) + 1) / 1000.0f;
+            inputRight[frame] = -inputLeft[frame];
+        }
+        Process(looper,
+                inputLeft.data(),
+                inputRight.data(),
+                outputLeft.data(),
+                outputRight.data(),
+                blockSize,
+                left,
+                right);
+    }
+
+    for (std::size_t index = 0; index < capacity; ++index)
+    {
+        const float expected = static_cast<float>((index % 997) + 1) / 1000.0f;
+        Require(leftBuffer[index] == expected && rightBuffer[index] == -expected,
+                "unity-speed recording writes every input sample to its matching frame");
+    }
 }
 
 void TestMixWindowAndPan()
@@ -821,6 +874,7 @@ int main()
 {
     TestInitializationAndValidation();
     TestRecordPlaybackAndWrap();
+    TestUnitySpeedRecordingPreservesEverySample();
     TestMixWindowAndPan();
     TestLoopWindowWrapsAcrossBufferEnd();
     TestFullLengthWindowWrapsWithinWorkingLoop();
