@@ -68,9 +68,9 @@ KarmaTestBedAudioProcessorEditor::KarmaTestBedAudioProcessorEditor(
     configureKnob(warp, "WARP");
     configureKnob(time, "TIME");
     configureKnob(blur, "BLUR");
-    configureKnob(reflect, "REFLECT");
+    configureKnob(reflect, "DEGRADE");
     configureKnob(mix, "MIX");
-    configureKnob(atmosphere, "ATMOSPHERE");
+    configureKnob(atmosphere, "DROP OUT");
     setSize(430, 690);
 }
 

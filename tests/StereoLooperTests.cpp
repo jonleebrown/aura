@@ -28,6 +28,15 @@ bool Near(float actual, float expected, float tolerance = 0.0001f)
 using Looper = aurora::dsp::StereoLooper;
 using Parameters = Looper::ChannelParameters;
 
+void SetDropoutProbabilities(aurora::dsp::KarmaEffects::Parameters& parameters,
+                             float value)
+{
+    for (std::size_t i = 0;
+         i < aurora::dsp::KarmaEffects::DropoutProbabilityCount;
+         ++i)
+        parameters.dropoutProbabilities[i] = value;
+}
+
 void Process(Looper& looper,
              const float* inputLeft,
              const float* inputRight,
@@ -408,9 +417,9 @@ void TestEraseOutputFade()
             240,
             left,
             right);
-    Require(outputLeft[0] > outputLeft[100] && outputLeft[100] > outputLeft[239],
-            "Freeze fades wet playback down instead of clicking");
-    Require(Near(outputLeft[239], 0.0f, 0.01f),
+    Require(outputLeft[0] > outputLeft[24] && outputLeft[24] > outputLeft[47],
+            "Freeze fades wet playback down over 1 ms");
+    Require(Near(outputLeft[47], 0.0f, 0.01f),
             "wet playback reaches silence while erase is held");
     Require(Near(leftBuffer[0], 0.0f) && Near(rightBuffer[0], 0.0f),
             "erase still clears the buffer beneath a stopped head");
@@ -447,11 +456,11 @@ void TestReversePlaybackAndControlCurves()
                 && Near(Controls::MapTimeRatio(1.0f), 1.0f),
             "Time follows the documented squared curve");
     Require(Near(Controls::MapBlurSpeed(0.0f), -2.0f)
-                && Near(Controls::MapBlurSpeed(0.48f), 0.0f)
+                && Near(Controls::MapBlurSpeed(0.25f), -1.0f)
                 && Near(Controls::MapBlurSpeed(0.5f), 0.0f)
-                && Near(Controls::MapBlurSpeed(0.52f), 0.0f)
+                && Near(Controls::MapBlurSpeed(0.75f), 1.0f)
                 && Near(Controls::MapBlurSpeed(1.0f), 2.0f),
-            "Blur maps to reverse, stop deadband, and forward ranges");
+            "Continuous Blur speed centers zero and places unity at quarter turns");
 }
 
 void TestSeamCrossfadeDoesNotCreatePeakBoost()
@@ -488,7 +497,7 @@ void TestSeamCrossfadeDoesNotCreatePeakBoost()
                 "seam crossfade does not boost a constant waveform");
 }
 
-void TestReflectBitReductionIsOptIn()
+void TestDegradeIsOptIn()
 {
     aurora::dsp::KarmaEffects effects;
     effects.Reset(1234U);
@@ -503,17 +512,17 @@ void TestReflectBitReductionIsOptIn()
     parameters.reflect = 1.0f;
     parameters.reflectMix = 0.0f;
     Require(Near(effects.Process(source, parameters).sample, source),
-            "Shift+Reflect at zero keeps bit reduction bypassed");
+            "Shift+Degrade at zero keeps the effect bypassed");
 
     parameters.reflectMix = 1.0f;
-    Require(Near(effects.Process(source, parameters).sample, 0.0f),
-            "maximum Reflect reduces the sample to the selected two-bit grid");
+    Require(Near(effects.Process(source, parameters).sample, 1.0f),
+            "maximum Degrade drives and reduces the sample to the two-bit grid");
 
     parameters.reflect = 0.5f;
     parameters.reflectMix = 0.5f;
     const float partial = effects.Process(source, parameters).sample;
-    Require(partial > 0.0f && partial < source,
-            "Reflect wet/dry control blends the reduced signal");
+    Require(partial > source && partial < 1.0f,
+            "Degrade wet/dry control blends the driven, reduced signal");
 }
 
 void TestAtmosphereIsBypassedAndDeterministic()
@@ -534,6 +543,7 @@ void TestAtmosphereIsBypassedAndDeterministic()
             "Atmosphere bypass does not schedule glitch events");
 
     parameters.atmosphere = 1.0f;
+    SetDropoutProbabilities(parameters, 0.25f);
     parameters.glitchDuration = 0.001f;
     std::vector<float> repeatHistoryFirst(24000);
     std::vector<float> repeatHistorySecond(24000);
@@ -566,6 +576,7 @@ void TestAtmosphereTransformationCoverage()
     bool seen[6]{};
     Effects::Parameters parameters;
     parameters.atmosphere = 1.0f;
+    SetDropoutProbabilities(parameters, 0.25f);
     parameters.glitchDuration = 0.001f;
     parameters.speed = 1.0f;
     parameters.loopSamples = 240;
@@ -582,22 +593,36 @@ void TestAtmosphereTransformationCoverage()
             const auto glitch = effects.ActiveGlitch();
             if (glitch != Effects::Glitch::None)
                 seen[static_cast<std::size_t>(glitch)] = true;
-            if (glitch == Effects::Glitch::ReverseBurst)
-                Require(result.speed <= 1.0f,
-                        "reverse burst transitions speed without exceeding base rate");
+            if (glitch == Effects::Glitch::Noise)
+                Require(std::fabs(result.sample - 0.25f) <= 0.2501f,
+                        "noise glitch gain stays within its reduced range");
         }
     }
 
     Require(seen[static_cast<std::size_t>(Effects::Glitch::VolumeCut)],
             "Atmosphere can schedule volume cuts");
-    Require(seen[static_cast<std::size_t>(Effects::Glitch::ReverseBurst)],
-            "Atmosphere can schedule reverse bursts");
     Require(seen[static_cast<std::size_t>(Effects::Glitch::SampleRateReduction)],
             "Atmosphere can schedule sample-rate reduction");
     Require(seen[static_cast<std::size_t>(Effects::Glitch::Noise)],
             "Atmosphere can schedule noise events");
     Require(seen[static_cast<std::size_t>(Effects::Glitch::Repeat)],
             "Atmosphere can schedule micro-loop repeats");
+}
+
+void TestZeroDropoutProbabilitiesSuppressEvents()
+{
+    using Effects = aurora::dsp::KarmaEffects;
+    Effects effects;
+    effects.Reset(4321U);
+    Effects::Parameters parameters;
+    parameters.atmosphere = 1.0f;
+    parameters.loopSamples = 48000;
+    SetDropoutProbabilities(parameters, 0.0f);
+    for (int sample = 0; sample < 24000; ++sample)
+        effects.Process(0.25f, parameters);
+    Require(effects.EventCount() == 0
+                && effects.ActiveGlitch() == Effects::Glitch::None,
+            "zero per-effect probabilities suppress events at full Atmosphere");
 }
 
 void TestRepeatMicroLoopDurationRange()
@@ -619,11 +644,15 @@ void TestRepeatMicroLoopDurationRange()
             for (std::size_t sampleIndex = 0; sampleIndex < 24000; ++sampleIndex)
             {
                 parameters.atmosphere = 0.0f;
+            SetDropoutProbabilities(parameters, 0.0f);
                 effects.Process(static_cast<float>(sampleIndex % 257) / 257.0f,
                                 parameters);
             }
 
             parameters.atmosphere = 1.0f;
+            SetDropoutProbabilities(parameters, 0.0f);
+            parameters.dropoutProbabilities[Effects::StutterProbability] = 1.0f;
+            parameters.probabilityModulationDepth = 0.0f;
             for (std::size_t sampleIndex = 0;
                  sampleIndex < 12000 && !foundExpectedDuration;
                  ++sampleIndex)
@@ -632,7 +661,7 @@ void TestRepeatMicroLoopDurationRange()
                 if (effects.ActiveGlitch() == Effects::Glitch::Repeat)
                 {
                     const std::size_t expectedLength = duration == 0.0f
-                                                     ? 240
+                                                     ? 480
                                                      : 24000;
                     Require(effects.RepeatLengthSamples() == expectedLength,
                             "repeat micro-loop length maps from 5 ms to 500 ms");
@@ -668,12 +697,16 @@ void TestRepeatCyclesCapturedLoopHistory()
         for (std::size_t sampleIndex = 0; sampleIndex < repeatHistory.size(); ++sampleIndex)
         {
             parameters.atmosphere = 0.0f;
+            SetDropoutProbabilities(parameters, 0.0f);
             effects.Process(static_cast<float>(sampleIndex % repeatLength)
                                 / static_cast<float>(repeatLength),
                             parameters);
         }
 
         parameters.atmosphere = 1.0f;
+        SetDropoutProbabilities(parameters, 0.0f);
+        parameters.dropoutProbabilities[Effects::StutterProbability] = 1.0f;
+        parameters.probabilityModulationDepth = 0.0f;
         for (std::size_t sampleIndex = 0;
              sampleIndex < 12000 && !verified;
              ++sampleIndex)
@@ -712,6 +745,7 @@ void TestAtmosphereEventsCancelCleanly()
     effects.Reset(1U);
     Effects::Parameters parameters;
     parameters.atmosphere = 1.0f;
+    SetDropoutProbabilities(parameters, 0.25f);
     parameters.glitchDuration = 1.0f;
     parameters.loopSamples = 48000;
 
@@ -976,9 +1010,14 @@ void TestChannelModesAndPickup()
     controls.Update(inputs, false);
     const float depth = controls.GetChannel(0).controls[Controls::Reflect];
     controls.Update(inputs, true);
-    Require(Near(controls.GetChannel(0).crushMix, 0.25f)
-                && Near(controls.GetChannel(1).crushMix, 0.25f),
-            "Shift+Reflect sets wet mix from the full knob position");
+    Require(Near(controls.GetChannel(0).crushMix, 1.0f)
+                && Near(controls.GetChannel(1).crushMix, 1.0f),
+            "pressing Shift alone preserves the default fully wet Degrade mix");
+    inputs[Controls::Reflect] = 0.3f;
+    controls.Update(inputs, true);
+    Require(Near(controls.GetChannel(0).crushMix, 0.3f)
+                && Near(controls.GetChannel(1).crushMix, 0.3f),
+            "Shift+Reflect changes wet mix only after the knob moves");
     inputs[Controls::Reflect] = 1.0f;
     controls.Update(inputs, true);
     Require(Near(controls.GetChannel(0).crushMix, 1.0f)
@@ -1000,9 +1039,10 @@ int main()
     TestEraseOutputFade();
     TestReversePlaybackAndControlCurves();
     TestSeamCrossfadeDoesNotCreatePeakBoost();
-    TestReflectBitReductionIsOptIn();
+    TestDegradeIsOptIn();
     TestAtmosphereIsBypassedAndDeterministic();
     TestAtmosphereTransformationCoverage();
+    TestZeroDropoutProbabilitiesSuppressEvents();
     TestRepeatMicroLoopDurationRange();
     TestRepeatCyclesCapturedLoopHistory();
     TestAtmosphereEventsCancelCleanly();

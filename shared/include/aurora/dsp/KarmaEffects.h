@@ -11,6 +11,15 @@ namespace dsp
 class KarmaEffects
 {
   public:
+    enum DropoutProbability : std::size_t
+    {
+        StutterProbability,
+        NoiseProbability,
+        SampleReductionProbability,
+        LevelDropProbability,
+        DropoutProbabilityCount
+    };
+
     enum class Glitch
     {
         None,
@@ -26,6 +35,8 @@ class KarmaEffects
         float reflect = 0.0f;
         float reflectMix = 0.0f;
         float atmosphere = 0.0f;
+        float dropoutProbabilities[DropoutProbabilityCount]{};
+        float probabilityModulationDepth = 0.5f;
         float glitchDuration = 0.0f;
         float speed = 1.0f;
         std::size_t loopSamples = 0;
@@ -69,6 +80,13 @@ class KarmaEffects
         pinkState_[0] = 0.0f;
         pinkState_[1] = 0.0f;
         pinkState_[2] = 0.0f;
+        for (std::size_t i = 0; i < DropoutProbabilityCount; ++i)
+        {
+            lfoPhase_[i] = RandomUnit() * 2.0f * pi_;
+            const float periodSeconds = 20.0f + RandomUnit() * 20.0f;
+            lfoPhaseStep_[i] = 2.0f * pi_
+                             / (static_cast<float>(sampleRate_) * periodSeconds);
+        }
         glitch_ = Glitch::None;
         volumeGain_ = 0.0f;
         speedSign_ = 1.0f;
@@ -78,22 +96,33 @@ class KarmaEffects
 
     Result Process(float sample, const Parameters& parameters)
     {
-        const float amount = Clamp(parameters.atmosphere);
+        const float atmosphere = Clamp(parameters.atmosphere);
+        float baselineTotal = 0.0f;
+        for (std::size_t i = 0; i < DropoutProbabilityCount; ++i)
+            baselineTotal += Clamp(parameters.dropoutProbabilities[i]);
+        const float amount = atmosphere > baselineTotal
+                           ? atmosphere
+                           : baselineTotal > 1.0f ? 1.0f : baselineTotal;
         const float speed = parameters.speed;
         currentDuration_ = Clamp(parameters.glitchDuration);
+        AdvanceLfos();
         if (glitch_ != Glitch::Repeat || eventSamples_ == 0)
             PushHistory(sample);
         if (amount <= 0.0f || parameters.loopSamples == 0)
         {
             CancelGlitch();
-            return {ApplyReflect(sample, parameters.reflect, parameters.reflectMix),
+            return {ApplyDegrade(sample, parameters.reflect, parameters.reflectMix),
                     speed};
         }
 
         if (eventSamples_ == 0)
         {
             if (schedulerSamples_ == 0)
-                ScheduleNext(amount, parameters.loopSamples);
+                ScheduleNext(amount,
+                             parameters.loopSamples,
+                             parameters.dropoutProbabilities,
+                             Clamp(parameters.probabilityModulationDepth),
+                             speed);
             else
                 --schedulerSamples_;
         }
@@ -158,7 +187,7 @@ class KarmaEffects
                 EndGlitch();
         }
 
-        return {ApplyReflect(processed, parameters.reflect, parameters.reflectMix),
+        return {ApplyDegrade(processed, parameters.reflect, parameters.reflectMix),
                 processedSpeed};
     }
 
@@ -182,9 +211,11 @@ class KarmaEffects
     static constexpr uint32_t sampleRate_ = 48000;
     static constexpr std::size_t minimumEventSamples_ = 240;
     static constexpr std::size_t fadeSamples_ = 144;
-    static constexpr std::size_t maximumRepeatSamples_ = sampleRate_ / 2;
+    static constexpr std::size_t maximumRepeatSamples_ = sampleRate_ * 2;
     static constexpr std::size_t repeatCount_ = 4;
     static constexpr std::size_t maximumLoopSamples_ = 40U * sampleRate_;
+    static constexpr float pi_ = 3.14159265358979323846f;
+    static constexpr float maximumEventProbability_ = 0.9f;
 
     static float Clamp(float value)
     {
@@ -204,6 +235,16 @@ class KarmaEffects
         return static_cast<float>(NextRandom() >> 8) / 16777216.0f;
     }
 
+    void AdvanceLfos()
+    {
+        for (std::size_t i = 0; i < DropoutProbabilityCount; ++i)
+        {
+            lfoPhase_[i] += lfoPhaseStep_[i];
+            if (lfoPhase_[i] >= 2.0f * pi_)
+                lfoPhase_[i] -= 2.0f * pi_;
+        }
+    }
+
     float NextNoise()
     {
         const float white = RandomUnit() * 2.0f - 1.0f;
@@ -218,24 +259,54 @@ class KarmaEffects
         return pink < -1.0f ? -1.0f : pink > 1.0f ? 1.0f : pink;
     }
 
-    void ScheduleNext(float amount, std::size_t loopSamples)
+    void ScheduleNext(float amount,
+                      std::size_t loopSamples,
+                      const float (&probabilities)[DropoutProbabilityCount],
+                      float modulationDepth,
+                      float speed)
     {
         schedulerSamples_ = static_cast<std::size_t>(
             4800.0f - amount * 4080.0f);
-        if (RandomUnit() >= amount * 0.9f)
+
+        float weights[DropoutProbabilityCount]{};
+        float totalWeight = 0.0f;
+        for (std::size_t i = 0; i < DropoutProbabilityCount; ++i)
+        {
+            const float baseline = Clamp(probabilities[i]);
+            const float lfo = std::sin(lfoPhase_[i]);
+            weights[i] = baseline * (1.0f + modulationDepth * lfo);
+            totalWeight += weights[i];
+        }
+        const float eventProbability = totalWeight < maximumEventProbability_
+                                     ? totalWeight
+                                     : maximumEventProbability_;
+        if (totalWeight <= 0.0f || RandomUnit() >= eventProbability)
             return;
+
+        float selection = RandomUnit() * totalWeight;
+        std::size_t selected = 0;
+        for (; selected + 1 < DropoutProbabilityCount; ++selected)
+        {
+            if (selection < weights[selected])
+                break;
+            selection -= weights[selected];
+        }
 
         const std::size_t boundedLoop = loopSamples < maximumLoopSamples_
                                       ? loopSamples
                                       : maximumLoopSamples_;
-        const auto selected = NextRandom() % 5U;
-        if (selected == 4U)
+        if (selected == StutterProbability)
         {
             if (historySamples_ == 0)
                 return;
-            const float durationMs = 5.0f + Clamp(currentDuration_) * 495.0f;
+            const float baseDurationMs =
+                10.0f + Clamp(currentDuration_) * 490.0f;
+            const float speedMagnitude = std::fabs(speed);
+            const float speedScale = 1.0f / std::fmax(speedMagnitude, 0.01f);
             const std::size_t requested = static_cast<std::size_t>(
-                durationMs * static_cast<float>(sampleRate_) / 1000.0f + 0.5f);
+                baseDurationMs * speedScale * static_cast<float>(sampleRate_)
+                    / 1000.0f
+                + 0.5f);
             repeatLengthSamples_ = requested;
             if (repeatLengthSamples_ > maximumRepeatSamples_)
                 repeatLengthSamples_ = maximumRepeatSamples_;
@@ -271,22 +342,18 @@ class KarmaEffects
 
             switch (selected)
             {
-            case 0:
+            case LevelDropProbability:
                 glitch_ = Glitch::VolumeCut;
                 volumeGain_ = (NextRandom() & 1U) == 0 ? 0.0f : 0.25f;
                 break;
-            case 1:
-                glitch_ = Glitch::ReverseBurst;
-                speedSign_ = -1.0f;
-                break;
-            case 2:
+            case SampleReductionProbability:
                 glitch_ = Glitch::SampleRateReduction;
                 holdPeriod_ = 4U + NextRandom() % 29U;
                 holdSamples_ = 0;
                 break;
             default:
                 glitch_ = Glitch::Noise;
-                noiseGain_ = 0.2f + RandomUnit() * 0.3f;
+                noiseGain_ = 0.1f + RandomUnit() * 0.15f;
                 pinkNoise_ = (NextRandom() & 1U) != 0;
                 break;
             }
@@ -322,19 +389,29 @@ class KarmaEffects
         return 1.0f;
     }
 
-    static float ApplyReflect(float sample, float reflect, float reflectMix)
+    static float ApplyDegrade(float sample, float reflect, float reflectMix)
     {
         const float depth = Clamp(reflect);
         const float wet = Clamp(reflectMix);
         if (depth <= 0.0f || wet <= 0.0f)
             return sample;
 
-        const int bits = 16 - static_cast<int>(std::floor(depth * 14.0f + 0.5f));
-        const int levels = (1 << (bits - 1)) - 1;
-        const float scaled = sample * static_cast<float>(levels);
+        const float drive = 1.0f + depth * 1.5f;
+        const float driven = std::tanh(sample * drive);
+        const float bitCurve = std::sqrt(depth)
+                             * std::sqrt(std::sqrt(depth));
+        const float bits = 16.0f - bitCurve * 14.0f;
+        const float bitExponent = bits - 1.0f;
+        const int wholeBits = static_cast<int>(bitExponent);
+        const float bitFraction = bitExponent - static_cast<float>(wholeBits);
+        const float lowerLevels = static_cast<float>((1U << wholeBits) - 1U);
+        const float upperLevels = static_cast<float>((1U << (wholeBits + 1)) - 1U);
+        const float levels = lowerLevels
+                           + (upperLevels - lowerLevels) * bitFraction;
+        const float scaled = driven * levels;
         const float quantized = (scaled >= 0.0f ? std::floor(scaled + 0.5f)
                                                 : std::ceil(scaled - 0.5f))
-                              / static_cast<float>(levels);
+                              / levels;
         return sample + (quantized - sample) * wet;
     }
 
@@ -374,6 +451,8 @@ class KarmaEffects
     float noiseGain_ = 0.0f;
     float currentDuration_ = 0.5f;
     float pinkState_[3]{};
+    float lfoPhase_[DropoutProbabilityCount]{};
+    float lfoPhaseStep_[DropoutProbabilityCount]{};
     float* repeatHistory_ = nullptr;
     Glitch glitch_ = Glitch::None;
     bool pinkNoise_ = false;

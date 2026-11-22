@@ -30,7 +30,7 @@ Hardware hardware;
 constexpr bool usbPersistenceEnabled = false;
 constexpr std::size_t sampleRate = 48000;
 constexpr std::size_t maxLoopSamples = 40U * sampleRate;
-constexpr std::size_t maxRepeatSamples = sampleRate / 2;
+constexpr std::size_t maxRepeatSamples = sampleRate * 2;
 std::size_t workingLoopSamples = 0;
 float loopBufferLeft[maxLoopSamples] DSY_SDRAM_BSS;
 float loopBufferRight[maxLoopSamples] DSY_SDRAM_BSS;
@@ -44,6 +44,8 @@ volatile bool clearing_status = false;
 volatile uint8_t mode_indicator = 0x03;
 volatile bool clear_loop_led_pulses = false;
 bool control_state_initialized = false;
+float filtered_control_inputs[aurora::dsp::KarmaControlState::ControlCount]{};
+bool control_input_filter_initialized = false;
 uint32_t shift_held_samples = 0;
 bool shift_consumed = false;
 float shift_start_controls[aurora::dsp::KarmaControlState::ControlCount]{};
@@ -220,9 +222,13 @@ LooperParameters MakeLooperParameters(std::size_t channel,
                                   / static_cast<float>(maxLoopSamples);
     parameters.speed = fullLength
                      ? 1.0f
-                     : ControlState::MapBlurSpeed(
-                           controls.controls[ControlState::Blur]);
-    parameters.mix = controls.controls[ControlState::Mix];
+                     : controlState.GetBlurSpeedMode()
+                               == ControlState::BlurSpeedMode::Quantized
+                         ? ControlState::MapQuantizedBlurSpeed(
+                               controls.controls[ControlState::Blur])
+                         : ControlState::MapBlurSpeed(
+                               controls.controls[ControlState::Blur]);
+    parameters.mix = ControlState::MapMix(controls.controls[ControlState::Mix]);
 #if defined(AURORA_DIAGNOSTIC) && AURORA_DIAGNOSTIC == 11
     parameters.start = 0.0f;
     parameters.length = fullLength
@@ -232,11 +238,20 @@ LooperParameters MakeLooperParameters(std::size_t channel,
     parameters.speed = 1.0f;
 #endif
     parameters.pan = controls.pan;
-    parameters.reflect = controls.controls[ControlState::Reflect];
+    parameters.reflect = ControlState::MapDegradeAmount(
+        controls.controls[ControlState::Reflect]);
     parameters.reflectMix = controls.crushMix;
     // Reflect controls the paired read-head slip and bit-crush amount.
     parameters.slippage = parameters.reflect;
     parameters.atmosphere = controls.controls[ControlState::Atmosphere];
+    for (std::size_t i = 0;
+         i < aurora::dsp::KarmaEffects::DropoutProbabilityCount;
+         ++i)
+        parameters.dropoutProbabilities[i] = parameters.atmosphere * 0.25f;
+    parameters.windowUpdateMode =
+        controlState.GetWindowUpdateMode() == ControlState::WindowUpdateMode::Jump
+            ? aurora::dsp::StereoLooper::WindowUpdateMode::Jump
+            : aurora::dsp::StereoLooper::WindowUpdateMode::Smooth;
     parameters.glitchDuration = controls.glitchDuration;
 #if defined(AURORA_DIAGNOSTIC) && (AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11)
     parameters.mix = 1.0f;
@@ -569,18 +584,17 @@ void UpdateChannelLeds()
     }
     const uint8_t events = TakeLoopEndEvents();
     for (std::size_t channel = 0; channel < 2; ++channel)
-    {
         if ((events & (1U << channel)) != 0)
             loop_end_pulse_until[channel] = now + 120;
 
-        const bool selected = (mode_indicator & (1U << channel)) != 0;
-        const bool pulse = now < loop_end_pulse_until[channel];
-        const bool on = pulse ? !selected : selected;
-        const float red = 0.0f;
-        const float green = channel == 0 && on ? 1.0f : 0.0f;
-        const float blue = channel == 1 && on ? 1.0f : 0.0f;
-        hardware.SetLed(channel == 0 ? LED_1 : LED_2, red, green, blue);
-    }
+    const bool leftSelected = (mode_indicator & 0x01U) != 0;
+    const bool rightSelected = (mode_indicator & 0x02U) != 0;
+    const bool leftLoopRestart = now < loop_end_pulse_until[0];
+    const bool rightLoopRestart = now < loop_end_pulse_until[1];
+    hardware.SetLed(LED_1, 0.0f, leftSelected ? 1.0f : 0.0f, 0.0f);
+    hardware.SetLed(LED_2, 0.0f, leftLoopRestart ? 1.0f : 0.0f, 0.0f);
+    hardware.SetLed(LED_3, 0.0f, 0.0f, rightLoopRestart ? 1.0f : 0.0f);
+    hardware.SetLed(LED_4, 0.0f, 0.0f, rightSelected ? 1.0f : 0.0f);
 }
 #endif
 
@@ -601,13 +615,34 @@ void AudioCallback(AudioHandle::InputBuffer input,
     }
     storage_audio_quiesced = false;
     hardware.ProcessAllControls();
-    float controlInputs[ControlState::ControlCount] = {
+    const float rawControlInputs[ControlState::ControlCount] = {
         ReadControl(KNOB_WARP, CV_WARP),
         ReadControl(KNOB_TIME, CV_TIME),
         ReadControl(KNOB_BLUR, CV_BLUR),
         ReadControl(KNOB_REFLECT, CV_REFLECT),
         ReadControl(KNOB_ATMOSPHERE, CV_ATMOSPHERE),
         ReadControl(KNOB_MIX, CV_MIX)};
+    if (!control_input_filter_initialized)
+    {
+        for (std::size_t control = 0; control < ControlState::ControlCount; ++control)
+            filtered_control_inputs[control] = rawControlInputs[control];
+        control_input_filter_initialized = true;
+    }
+    else
+    {
+        constexpr float controlSmoothingSeconds = 0.02f;
+        const float elapsedSeconds = static_cast<float>(frameCount)
+                                   / static_cast<float>(sampleRate);
+        const float smoothing = 1.0f
+                              - std::exp(-elapsedSeconds
+                                         / controlSmoothingSeconds);
+        for (std::size_t control = 0; control < ControlState::ControlCount; ++control)
+            filtered_control_inputs[control] += smoothing
+                * (rawControlInputs[control] - filtered_control_inputs[control]);
+    }
+    float controlInputs[ControlState::ControlCount];
+    for (std::size_t control = 0; control < ControlState::ControlCount; ++control)
+        controlInputs[control] = filtered_control_inputs[control];
     if (!control_state_initialized)
     {
         controlState.Initialize(controlInputs);
@@ -632,7 +667,7 @@ void AudioCallback(AudioHandle::InputBuffer input,
     if (shiftHeld)
     {
         shift_held_samples += static_cast<uint32_t>(frameCount);
-        for (std::size_t control = ControlState::Reflect;
+        for (std::size_t control = ControlState::Warp;
              control <= ControlState::Mix;
              ++control)
         {
@@ -686,7 +721,9 @@ void AudioCallback(AudioHandle::InputBuffer input,
                              ? static_cast<uint32_t>(frameCount)
                              : remaining;
     }
-    controlState.Update(controlInputs, shiftHeld);
+    controlState.Update(controlInputs,
+                        shiftHeld,
+                        hardware.GetKnobValue(KNOB_BLUR));
     if (shiftedControlChanged || fullErase)
         shift_consumed = true;
 

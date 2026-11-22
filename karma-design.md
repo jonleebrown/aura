@@ -32,9 +32,10 @@ The Daisy Seed provides 64 MB of external SDRAM. Two independent circular buffer
 * **Trigger:** Falling edge (release) of the `Shift` button, **only if** held for `< 300ms` and no secondary Shift+Control parameter was modified during the press.
 * **Cycle Order:** `L Mode` $\rightarrow$ `R Mode` $\rightarrow$ `LR Mode` $\rightarrow$ `L Mode`
 * **LED Feedback:**
-  * **L Mode:** Leftmost LED lit **Green**.
-  * **R Mode:** Rightmost LED lit **Blue**.
-  * **LR Mode:** Both Leftmost (**Green**) and Rightmost (**Blue**) LEDs lit.
+  * **L Mode:** LED 1 lit **Green**.
+  * **R Mode:** LED 4 lit **Blue**.
+  * **LR Mode:** LED 1 (**Green**) and LED 4 (**Blue**) lit.
+  * **Loop restart:** LED 2 flashes **Green** for L; LED 3 flashes **Blue** for R.
 
 ### 2.2 Parameter Storage & LR Mode "Pickup" Offset Behavior
 Aurora exposes knob and CV readings independently. The current firmware
@@ -55,12 +56,12 @@ to `[0.0, 1.0]` and CV values are bipolar `[-1.0, 1.0]`.
 
 | Control (Knob + CV) | Function | Curve & Behavior |
 | :--- | :--- | :--- |
-| **Warp** | Loop Start Position | `[0.0, 1.0]` mapped across `working_buffer_length`. Circular wrapping preserves loop length. Slewed slightly for smooth tape-scrubbing without clicks. |
-| **Time** | Loop Size / Window | Exponential curve from `0.0` (0 samples / silent) at CCW to `100%` of `working_buffer_length` at CW. High resolution at the bottom end for micro-looping. Uses a short dual-tap crossfade (`5–10ms`) on boundary changes to prevent clicks and unwanted pitch sweeps. |
-| **Blur** | Playback Speed & Direction | Bipolar exponential curve. **CCW:** `-2.0x` (200% reverse). **Noon (`0.48–0.52` deadband):** `0.0x` (stopped). **CW:** `+2.0x` (200% forward). |
-| **Reflect** | Bit Reduction Depth | Maps from 16-bit quantization at CCW to 2-bit quantization at CW. Shift+Reflect controls the wet/dry blend; both controls default to bypass. |
-| **Atmosphere** | Glitch Probability | Schedules events from 0% at CCW to at most 90% at CW. Shift+Atmosphere controls the event-duration ratio. |
-| **Mix** | Dry / Wet Balance | Clean default uses a linear crossfade between live dry input and wet buffer playback; correlated signals cannot exceed their original peak from the blend. The initial equal-power proposal is deferred until headroom behavior is measured. |
+| **Warp** | Loop Start Position | `[0.0, 1.0]` mapped across `working_buffer_length`. Circular wrapping preserves loop length. Smooth mode slews the read head for tape-style movement; Jump mode fades around a direct window change. |
+| **Time** | Loop Size / Window | Exponential curve from `0.0` (0 samples / silent) at CCW to `100%` of `working_buffer_length` at CW. High resolution at the bottom end for micro-looping. Smooth mode slews window changes; Jump mode fades around a direct change. |
+| **Blur** | Playback Speed & Direction | Continuous mode is linear: **CCW:** `-2.0x` (200% reverse); **noon:** `0.0x` (stopped); **CW:** `+2.0x` (200% forward). `-1x` and `+1x` are approximately at 9 and 3 o'clock. Shift+Blur latches Continuous or Quantized mode. |
+| **Degrade** (Reflect control) | Smooth slip, random read-head jitter, soft overdrive, and bit reduction | A 2% bottom dead zone guarantees bypass at the knob stop; the remaining range is remapped continuously. A random read offset is selected every 96 samples and ramped over that interval, reaching at most ±3 samples at full Degrade. Fractional bit depth follows `16 - 14 × Degrade^0.75`, interpolating between integer quantizer grids. Shift+Degrade controls the wet/dry blend, which defaults to 100% wet; the main Degrade control at zero bypasses all effects. |
+| **Drop Out** (Atmosphere control) | Dropout probability | The knob sets a shared baseline; four independent slow LFOs modulate the individual probabilities of stutter, noise, sample-rate reduction, and level drop. Shift+Drop Out controls event duration. |
+| **Mix** | Dry / Wet Balance | Linear crossfade between live dry input and wet buffer playback; the first and last 1% of travel snap to exact dry and wet endpoints. Correlated signals cannot exceed their original peak from the blend. |
 
 ### 3.2 Momentary Buttons & Gate Jacks
 
@@ -73,8 +74,10 @@ to `[0.0, 1.0]` and CV values are bipolar `[-1.0, 1.0]`.
 
 | Combination | Function | Behavior |
 | :--- | :--- | :--- |
-| **Shift + Atmosphere** | Glitch Duration | Sets a proportional duration ratio (`[0.001, 1.0]`) of the active loop, with randomized duration from 0.5x to 1.5x that ratio, bounded by the loop length and a 5 ms minimum where the loop permits. |
-| **Shift + Reflect** | Bit Reduction Wet/Dry Mix | Linear crossfade (`0%` to `100%`) blending clean and bit-reduced loop audio. The knob position directly sets the blend while Shift is held; Reflect depth retains its unshifted setting. |
+| **Shift + Drop Out** | Dropout Duration | Sets a proportional duration ratio (`[0.001, 1.0]`) of the active loop, with randomized duration from 0.5x to 1.5x that ratio, bounded by the loop length and a 5 ms minimum where the loop permits. |
+| **Shift + Degrade** | Degrade Wet/Dry Mix | Linear crossfade (`0%` to `100%`) blending clean and degraded loop audio. Defaults to `100%` wet. Moving the knob while Shift is held sets the blend; pressing Shift alone leaves the mix unchanged. The Degrade amount retains its unshifted setting. |
+| **Shift + Warp or Time** | Window Transition Mode | Moving either control while Shift is held toggles the shared mode between **Smooth** and **Jump** once per Shift hold. The Warp and Time values do not change during this gesture. Smooth slews the read window and produces tape-style pitch movement. Jump fades the wet signal out for 5 ms, moves directly to the new window, then fades back in over 5 ms to avoid clicks. |
+| **Shift + Blur** | Speed Mode Toggle | Turning the physical Blur knob while Shift is held toggles between **Continuous** and **Quantized** speed modes once per Shift hold. The selected mode stays latched after Shift is released, while Blur controls speed normally. Continuous mode ranges from `-2x` at minimum through `0x` at noon to `+2x` at maximum, with `-1x` and `+1x` approximately at 9 and 3 o'clock. Quantized mode steps through `-2, -1.5, -1.25, -1, -0.5, -0.25, 0.01, 0.25, 0.5, 1, 1.25, 1.5, 2x` across the knob travel. |
 | **Shift + Mix** | Stereo Panning | Equal-power panning (`cos` / `sin`) of the active channel across the stereo output field. (Default: L channel hard left, R channel hard right). |
 | **Shift + Reverse** (Btn or Gate) | Redefine Buffer Length | Resets `working_buffer_length` to the exact duration the button/gate is held (clamped to `40.0s` max), recording fresh audio into the new window and applying a `2–5ms` crossfade at the loop seam. |
 | **Shift + Freeze** (Btn ONLY) | Full Buffer Erase | Starts a bounded, incremental erase of the full active buffer (`buf_L`, `buf_R`, or both). Ignores the Freeze gate jack. |
@@ -102,8 +105,9 @@ zero to 100% of the current working duration. Warp is scaled within that
 duration.
 L/R modes apply Time as an absolute normalized
 control, while LR mode applies a clamped offset from its entry latch. Freeze
-progressively clears the loop and fades its wet output to silence over 5 ms
-while held; Shift+Freeze full erase cuts the wet loop component immediately.
+progressively clears the loop and fades its wet output to silence over 1 ms
+while held, then restores it over 3 ms after release; Shift+Freeze full erase
+cuts the wet loop component immediately.
 Full erase clears both channels, resets the working-loop duration to zero, and
 stops playback/loop-end LED events. The dry signal remains controlled by Mix.
 During recording,
@@ -114,10 +118,18 @@ and length, computed against the final working-loop size (including a
 Shift+Reverse capture). The window is circular within the active working-loop
 region: if start plus length passes its end, playback wraps to the region's
 beginning rather than reading the unused remainder of the backing buffer.
+During an overdub, the write cursor follows the playback phase and wraps
+directly to the beginning of the active window, without skipping a seam region.
+It repeatedly overwrites that same section of the existing loop. On
+record or Freeze press, each channel latches its current window and speed; that
+configuration remains fixed for the hold. In LR mode both channels start and
+stop on the same audio frames while traversing their independently latched
+windows at their respective speeds. Changing controls after release changes
+playback of the written or erased segment without changing the segment itself.
 
-Each channel LED briefly flashes at that channel's loop-end crossing. A
-selected channel flashes off from its normal mode-indicator state; an
-unselected channel flashes on.
+Each channel's restart pulse is independent of the steady mode indicators:
+LED 2 flashes green at an L loop restart, and LED 3 flashes blue at an R loop
+restart.
 
 **Clean-playback diagnostic:** With Reflect bypassed, the audio path has no
 bit reduction, waveshaper, saturation, or other intentional distortion.
@@ -129,42 +141,49 @@ The firmware now uses linear dry/wet and linear seam crossfades, which keep
 same-polarity correlated samples within their original peak level. These
 linear blends replace the equal-power curves specified in the initial design
 for the clean default path; equal-power stereo panning remains unchanged.
-This removes known algorithmic peak boosts but does not prove the heard
-crackle was caused by them. We do not yet have a recorded hardware output or
-measured callback timing to establish whether the remaining artifact is
-buffer discontinuity, source level, or callback underrun.
+This removes known algorithmic peak boosts; the later Shift-dependent
+listening report pointed to unsmoothed control updates as a stronger cause of
+the remaining artifact, described below.
 
-**Latest hardware follow-up:** After trying the peak-safe blend update, the
-user reports the loop is still louder and has a "squelchy" quality; the earlier
-pass-through output remains fine. Full-wet Mix seems too loud, while a Mix
-setting around 2 o'clock seems less squelchy. The artifact is not diagnosed
-and the proposed blend gain boost was not a sufficient explanation. The user
-likes the possibility of intentionally overdriving the sound but wants more
-testing before deciding. No attenuation or intentional drive has been added;
-do not tune new effects to conceal or depend on this sound. Keep clean/bypass
-behavior available and record level-matched comparisons.
+**Clean default setup:** Leave CV inputs unpatched. Set Start fully
+counter-clockwise, Length fully clockwise, Blur/Speed near `+1x` (about 3
+o'clock in Continuous mode), Mix fully clockwise, and Degrade (Reflect) and
+Drop Out (Atmosphere) fully counter-clockwise. At zero, the main effect knobs
+bypass their effects regardless of the Shift-controlled Degrade mix and Drop
+Out duration. Shift alone should not change the audio. This should provide a
+near-input-faithful record/playback reference.
 
-Reflect bit reduction is an optional Phase 3 effect. Set its depth without
-Shift, then hold Shift and set its wet mix with the same knob; the wet mix
-follows the full knob position while shifted. For a maximum-effect check, set
-Reflect fully clockwise, then hold Shift and leave it fully clockwise. The
-uncontrolled louder/squelchy character is not the intentional effect. Do not
-treat clipping or callback underruns as the intended effect.
+**Control-motion finding:** The audio callback runs at 500 Hz (48 kHz / 96
+frames). The SDK's default 2 ms analog-control smoothing computes a coefficient
+of `2` at that rate, which is clamped to `1`; knob and CV readings therefore
+reach the control state without smoothing. Shift freezes Warp, Time, and Blur
+updates, so it can temporarily stop ADC variation from moving the read window
+or speed. Firmware now applies a 20 ms one-pole filter to combined knob/CV
+values before they reach the control state. Hardware listening is still needed
+to confirm that this removes the reported squelch.
+
+**Latest hardware follow-up:** The user reports the loop sounds squelchy with
+Degrade and Drop Out at minimum, and becomes cleaner while Shift is held. This
+matches the control-motion finding above: Shift freezes Warp, Time, and Blur
+while unsmoothed ADC values otherwise update those parameters. The firmware
+filter is intended to stabilize the clean default path; hardware listening is
+still required to confirm the cause and fix. Degrade's soft drive is a separate
+intentional effect with a clean zero-depth bypass.
 
 ---
 
-## 5. Atmosphere Generative Glitch Engine
+## 5. Drop Out Generative Glitch Engine
 
-The Atmosphere engine runs independently per channel to allow asynchronous stereo glitching.
+The Drop Out engine runs independently per channel to allow asynchronous stereo glitching. Four LFOs use independently randomized periods between 20 and 40 seconds. The Drop Out knob supplies a shared baseline, split evenly among the four effects; each LFO scales its effect's baseline probability, so a zero baseline always disables that effect. Combined event probability is capped at 90%.
 
-1. **Scheduler:** Evaluates a Bernoulli trial every `15ms` to `100ms`, with the interval shortening as **Atmosphere** increases, against the probability (`0%–90%`).
+1. **Scheduler:** Evaluates event opportunities every `15ms` to `100ms`, with the interval shortening as **Drop Out** increases. LFO-scaled probabilities set the chance and weighted selection of the event type.
 2. **Duration Calculation:** When triggered, event length is randomized around the target duration:
-   $$\text{Event Samples} = \text{WorkingBufferLength} \times \text{Ratio}_{\text{Shift+Atm}} \times \text{Rand}(0.5, 1.5)$$
+   $$\text{Event Samples} = \text{WorkingBufferLength} \times \text{Ratio}_{\text{Shift+Drop Out}} \times \text{Rand}(0.5, 1.5)$$
 3. **Transformation Selection:** On trigger, randomly activate **one** of the following transformations, crossfading in/out over `3ms` to prevent clicks:
-   * **Volume Cut:** Attenuate playback gain to `0.0f` (mute) or `0.25f` (`-12 dB`).
-   * **Reverse Burst:** Invert the sign of the current `Blur` playback speed (`speed = -speed`).
+   * **Level Drop:** Attenuate playback gain to `0.0f` (mute) or `0.25f` (`-12 dB`).
    * **Sample Rate Reduction (SRR):** Sample-and-hold playback output for $N$ ticks (randomized between `4x` and `32x` decimation).
-   * **Noise Injection:** Mix in generated noise (`20%–50%` level), randomly selecting between **White Noise** (uniform PRNG) and **Pink Noise** (3-pole Paul Kellet filter) per event.
+   * **Noise Injection:** Mix in generated noise (`10%–25%` level), randomly selecting between **White Noise** (uniform PRNG) and **Pink Noise** (3-pole Paul Kellet filter) per event.
+   * **Stutter:** Repeat a short captured slice four times while the playback head pauses.
 
 ---
 
@@ -184,10 +203,11 @@ Executed for every sample in the audio callback (96-sample / 2 ms blocks at
 (2) Circular Buffer Read (Warp Start, Time Window, Blur Speed + Deadband)
        │
        ▼
-(3) Atmosphere Glitch Engine (Volume Cut, Reverse, SRR, White/Pink Noise)
+(3) Drop Out Engine (Stutter, Noise, SRR, Level Drop)
        │
        ▼
-(4) Reflect Bitcrusher ──► [Shift + Reflect Wet/Dry Blend]
+(4) Degrade (Read Slip + Soft Overdrive + Bit Reduction)
+    ──► [Shift + Degrade Wet/Dry Blend]
        │
        ▼
 (5) Mix (Peak-Safe Linear Dry Input vs. Wet Processed Buffer)
@@ -326,12 +346,15 @@ loop; the dry signal intentionally remains according to Mix.
 
 Phase 3 effects are now in the loop-playback path. They do not affect live input
 monitoring or recorded buffer contents, and are cancelled while recording or
-erasing. Reflect is fully bypassed unless both its depth and Shift-controlled
-wet mix are raised. Atmosphere is fully bypassed at zero and otherwise schedules
-bounded events. Hardware testing confirms Atmosphere events are audible and
-Shift+Atmosphere increases their duration. Reflect is not yet confirmed
-audible. The rough playback reported during Phase 2 remains an unresolved
-clean-path artifact, not evidence that the effects are working as intended.
+erasing. Degrade combines read-head slippage, soft overdrive, and bit reduction;
+the slippage follows Degrade amount, while Shift+Degrade blends the driven and
+quantized audio. Drop Out is fully bypassed
+at zero and otherwise schedules bounded events with four slow probability
+LFOs. Hardware testing confirms Drop Out events are audible and Shift+Drop Out
+increases their duration. Degrade's new overdrive and bit reduction still need
+hardware listening. The rough playback reported during Phase 2 remains an
+unresolved clean-path artifact, not evidence that the effects are working as
+intended.
 
 **Exit check:** L, R, and LR recording/playback behaviors, control ranges,
 Shift gestures, and zero-speed recording match the design; changes between
@@ -342,25 +365,26 @@ accepted as the clean baseline.
 
 ### Phase 3: Buffer processing and generative effects
 
-* Implemented optional Reflect bit reduction with a Shift-controlled wet/dry
-  blend. Both controls at zero preserve the clean signal path.
-* Implemented Atmosphere event scheduling for volume cuts, reverse bursts,
-  sample-rate reduction, white/pink noise, and four-cycle repeat/stutter
-  events. Repeat slices span 5-500 ms based on the Shift+Atmosphere duration
-  control; they play from the recent loop history while the playback head is
-  held, then normal playback resumes. Events are independently randomized per
-  channel, crossfaded over 3 ms, and bounded by the active loop (up to 40
-  seconds).
+* Implemented Degrade with read-head slippage, soft overdrive before bit
+  reduction, and a Shift-controlled wet/dry blend.
+* Implemented Drop Out probability modulation for level drops, sample-rate
+  reduction, white/pink noise, and four-cycle repeat/stutter events. Four
+  independently randomized 20-40 second LFOs scale effect probabilities.
+  Repeat slices span 10-500 ms at 1x based on the Shift+Drop Out duration
+  control, scale inversely with absolute playback speed, and cap at 2 seconds.
+  They play from recent loop history while the playback head is held, then
+  normal playback resumes. Events are independently randomized per channel
+  and bounded by the active loop (up to 40 seconds).
 * Effects process loop playback only. Events are cancelled during recording
-  and erasing and when Atmosphere is returned to zero.
+  and erasing and when Drop Out is returned to zero.
 * Added portable tests for bypass behavior, deterministic scheduling,
   transformation coverage, duration bounds, and cancellation.
-* Hardware feedback confirms Atmosphere events are audible and Shift+Atmosphere
+* Hardware feedback confirms Drop Out events are audible and Shift+Drop Out
   increases dropout duration; the user is satisfied with this mapping for now.
-  Reflect's audibility needs another hardware check; Shift+Reflect maps its
+  Degrade's overdrive and bit reduction need another hardware check; Shift+Degrade maps its
   blend over the full knob range for a more conclusive test.
-* Firmware build and portable tests pass. Atmosphere has been heard on
-  hardware; its duration control is acceptable for now. Reflect audibility,
+* Firmware build and portable tests pass. Drop Out has been heard on
+  hardware; its duration control is acceptable for now. Degrade audibility,
   output levels, and callback timing still need further testing. Test one
   effect at a time and compare against bypass at matched level. Full-wet Mix
   is reported too loud; no attenuation change has been made while the user

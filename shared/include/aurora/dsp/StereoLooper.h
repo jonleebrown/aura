@@ -13,6 +13,12 @@ namespace dsp
 class StereoLooper
 {
   public:
+    enum class WindowUpdateMode
+    {
+        Smooth,
+        Jump
+    };
+
     struct ChannelParameters
     {
         float start = 0.0f;
@@ -31,6 +37,9 @@ class StereoLooper
         // Read-head slip amount, normalized from 0 (off) to 1 (full).
         float slippage = 0.0f;
         float atmosphere = 0.0f;
+        float dropoutProbabilities[KarmaEffects::DropoutProbabilityCount]{};
+        float probabilityModulationDepth = 0.5f;
+        WindowUpdateMode windowUpdateMode = WindowUpdateMode::Smooth;
         float glitchDuration = 0.5f;
     };
 
@@ -90,6 +99,8 @@ class StereoLooper
                                              repeatBufferCapacity_);
         channels_[0].effects.Reset(0x13579BDFU);
         channels_[1].effects.Reset(0x2468ACE1U);
+        channels_[0].readJitterRandomState = 0xA341316CU;
+        channels_[1].readJitterRandomState = 0xC8013EA4U;
         recording_ = false;
         erasing_ = false;
         clearing_ = false;
@@ -107,6 +118,8 @@ class StereoLooper
         channels_[1] = ChannelState{};
         channels_[0].effects.Reset(0x13579BDFU);
         channels_[1].effects.Reset(0x2468ACE1U);
+        channels_[0].readJitterRandomState = 0xA341316CU;
+        channels_[1].readJitterRandomState = 0xC8013EA4U;
         clearCompleted_ = false;
         return true;
     }
@@ -140,7 +153,6 @@ class StereoLooper
             state.recording = false;
             state.recordingFromStart = false;
             state.erased = false;
-            state.hasWrapped = false;
             state.playbackWrapped = false;
             state.loopEnded = false;
             state.effects.Cancel();
@@ -271,9 +283,24 @@ class StereoLooper
   private:
     struct ChannelState
     {
+        enum class WindowFadePhase
+        {
+            Idle,
+            Out,
+            In
+        };
+
         float phase = 0.0f;
         float slipPhase = 0.0f;
         float recordStartPhase = 0.0f;
+        float recordSpeed = 1.0f;
+        float eraseSpeed = 1.0f;
+        double erasePosition = 0.0;
+        uint32_t readJitterRandomState = 0xA341316CU;
+        std::size_t readJitterSamplesRemaining = 0;
+        float readJitterOffset = 0.0f;
+        float readJitterTarget = 0.0f;
+        float readJitterStep = 0.0f;
         double writePosition = 0.0;
         float currentStart = 0.0f;
         float currentLength = 0.0f;
@@ -282,7 +309,6 @@ class StereoLooper
         bool recording = false;
         bool recordingFromStart = false;
         bool erased = false;
-        bool hasWrapped = false;
         bool clearRequested = false;
         bool clearing = false;
         bool playbackWrapped = false;
@@ -290,6 +316,8 @@ class StereoLooper
         bool dirty = false;
         float eraseGain = 1.0f;
         float eraseHoldSample = 0.0f;
+        WindowFadePhase windowFadePhase = WindowFadePhase::Idle;
+        std::size_t windowFadeSamples = 0;
         std::size_t clearProgress = 0;
         std::size_t dirtyBegin = 0;
         std::size_t dirtyEnd = 0;
@@ -298,6 +326,10 @@ class StereoLooper
 
     static constexpr float halfPi = 1.57079632679489661923f;
     static constexpr float windowSlewSamples = 240.0f;
+    static constexpr float eraseFadeOutSamples = 48.0f;
+    static constexpr float eraseFadeInSamples = 144.0f;
+    static constexpr std::size_t jumpFadeSamples = 240;
+    static constexpr float jumpWindowChangeThreshold = 0.00125f;
     static constexpr float readSlipMaxSamples = 8.0f;
     static constexpr float readSlipPhaseStep = 0.0000654498469498f;
 
@@ -414,6 +446,12 @@ class StereoLooper
                                        * static_cast<float>(capacity_);
         const bool startingRecording = parameters.record && !state.recording;
         const bool stoppingRecording = !parameters.record && state.recording;
+        const bool eraseNow = parameters.erase && !parameters.record;
+        if (startingRecording)
+        {
+            state.windowFadePhase = ChannelState::WindowFadePhase::Idle;
+            state.windowFadeSamples = 0;
+        }
         if (!state.initializedWindow)
         {
             state.currentStart = targetStart;
@@ -429,17 +467,39 @@ class StereoLooper
             if (parameters.finishRecordAtFullWindow)
                 state.phase = 0.0f;
         }
-        else if (!state.recording && !startingRecording)
+        else if (!state.recording && !startingRecording && !eraseNow)
         {
-            if (targetLength == 0.0f)
-                state.currentLength = 0.0f;
+            if (parameters.windowUpdateMode == WindowUpdateMode::Smooth)
+            {
+                state.windowFadePhase = ChannelState::WindowFadePhase::Idle;
+                state.windowFadeSamples = 0;
+                if (targetLength == 0.0f)
+                    state.currentLength = 0.0f;
+                else
+                {
+                    state.currentStart += (targetStart - state.currentStart)
+                                        / windowSlewSamples;
+                    state.currentLength += (targetLength - state.currentLength)
+                                         / windowSlewSamples;
+                    state.currentRegionLength = targetRegionLength;
+                }
+            }
             else
             {
-                state.currentStart += (targetStart - state.currentStart)
-                                    / windowSlewSamples;
-                state.currentLength += (targetLength - state.currentLength)
-                                     / windowSlewSamples;
-                state.currentRegionLength = targetRegionLength;
+                const float changeThreshold =
+                    std::fmax(1.0f,
+                             targetRegionLength * jumpWindowChangeThreshold);
+                const bool targetChanged =
+                    std::fabs(targetStart - state.currentStart) > changeThreshold
+                    || std::fabs(targetLength - state.currentLength) > changeThreshold
+                    || std::fabs(targetRegionLength - state.currentRegionLength)
+                           > changeThreshold;
+                if (targetChanged
+                    && state.windowFadePhase != ChannelState::WindowFadePhase::Out)
+                {
+                    state.windowFadePhase = ChannelState::WindowFadePhase::Out;
+                    state.windowFadeSamples = 0;
+                }
             }
         }
 
@@ -464,11 +524,13 @@ class StereoLooper
         {
             if (parameters.record)
             {
+                // A held overdub uses the speed that was selected when the
+                // button went down. Both stereo channels latch independently.
+                state.recordSpeed = parameters.speed;
                 state.recordStartPhase = parameters.recordFromStart ? 0.0f : state.phase;
                 state.writePosition = static_cast<double>(state.recordStartPhase)
                                     * state.currentLength;
                 state.phase = state.recordStartPhase;
-                state.hasWrapped = false;
                 state.playbackWrapped = false;
                 state.recordingFromStart = parameters.recordFromStart;
             }
@@ -476,10 +538,8 @@ class StereoLooper
             {
                 state.phase = state.recordingFromStart
                             ? 0.0f
-                            : state.hasWrapped
-                            ? static_cast<float>(state.writePosition
-                                                 / state.currentLength)
-                            : state.recordStartPhase;
+                            : static_cast<float>(state.writePosition
+                                                 / state.currentLength);
                 state.recordingFromStart = false;
             }
             state.recording = parameters.record;
@@ -494,13 +554,19 @@ class StereoLooper
             state.recordStartPhase = 0.0f;
             state.writePosition = 0.0;
             state.phase = 0.0f;
-            state.hasWrapped = false;
             state.playbackWrapped = false;
             state.recordingFromStart = true;
         }
 
-        const bool eraseNow = parameters.erase && !parameters.record;
         const bool wasErasing = state.erased;
+        if (eraseNow && !wasErasing)
+        {
+            // Freeze erases the playhead's window using the settings present
+            // at button-down; later knob changes affect playback after release.
+            state.eraseSpeed = parameters.speed;
+            state.erasePosition = static_cast<double>(state.phase)
+                                * state.currentLength;
+        }
         recording_ = recording_ || state.recording;
         erasing_ = erasing_ || eraseNow;
 
@@ -509,8 +575,12 @@ class StereoLooper
         if (state.currentLength > 0.0f)
         {
             const float slippage = Clamp(parameters.slippage);
+            const float readJitter = !state.recording && !eraseNow
+                                   ? AdvanceReadJitter(state, slippage)
+                                   : 0.0f;
             const float slipOffset = std::sin(state.slipPhase)
-                                   * readSlipMaxSamples * slippage;
+                                   * readSlipMaxSamples * slippage
+                                   + readJitter;
             const float readPhase = WrapPhase(
                 state.phase + slipOffset / state.currentLength);
             wet = ReadWindow(buffer, readPhase, state, parameters.speed);
@@ -527,6 +597,13 @@ class StereoLooper
             effectParameters.reflect = parameters.reflect;
             effectParameters.reflectMix = parameters.reflectMix;
             effectParameters.atmosphere = parameters.atmosphere;
+            for (std::size_t i = 0;
+                 i < KarmaEffects::DropoutProbabilityCount;
+                 ++i)
+                effectParameters.dropoutProbabilities[i] =
+                    parameters.dropoutProbabilities[i];
+            effectParameters.probabilityModulationDepth =
+                parameters.probabilityModulationDepth;
             effectParameters.glitchDuration = parameters.glitchDuration;
             effectParameters.speed = parameters.speed;
             effectParameters.loopSamples = static_cast<std::size_t>(
@@ -541,16 +618,30 @@ class StereoLooper
             state.eraseHoldSample = wet;
 
         const float targetEraseGain = eraseNow ? 0.0f : 1.0f;
-        const float eraseGainStep = 1.0f / windowSlewSamples;
+        const float eraseFadeSamples = eraseNow ? eraseFadeOutSamples
+                                                : eraseFadeInSamples;
+        const float eraseGainStep = 1.0f / eraseFadeSamples;
         if (state.eraseGain < targetEraseGain)
             state.eraseGain = std::fmin(targetEraseGain,
                                         state.eraseGain + eraseGainStep);
         else if (state.eraseGain > targetEraseGain)
             state.eraseGain = std::fmax(targetEraseGain,
                                         state.eraseGain - eraseGainStep);
+        float windowTransitionGain = 1.0f;
+        if (parameters.windowUpdateMode == WindowUpdateMode::Jump
+            && !state.recording)
+        {
+            if (state.windowFadePhase == ChannelState::WindowFadePhase::Out)
+                windowTransitionGain = 1.0f
+                    - static_cast<float>(state.windowFadeSamples)
+                        / static_cast<float>(jumpFadeSamples);
+            else if (state.windowFadePhase == ChannelState::WindowFadePhase::In)
+                windowTransitionGain = static_cast<float>(state.windowFadeSamples)
+                                     / static_cast<float>(jumpFadeSamples);
+        }
         const float wetOutput = eraseNow
                               ? state.eraseHoldSample * state.eraseGain
-                              : wet * state.eraseGain;
+                              : wet * state.eraseGain * windowTransitionGain;
 
         if (state.currentLength > 0.0f)
         {
@@ -558,12 +649,15 @@ class StereoLooper
             {
                 const auto regionFrames = RegionFrameCount(
                     state.currentRegionLength);
+                const double windowPosition = WrapPosition(
+                    state.erasePosition,
+                    static_cast<double>(state.currentLength));
                 const auto index = static_cast<std::size_t>(WrapPosition(
-                    state.currentStart + state.phase * state.currentLength,
-                    static_cast<float>(regionFrames)));
+                    static_cast<double>(state.currentStart) + windowPosition,
+                    static_cast<double>(regionFrames)));
                 buffer[index] = 0.0f;
                 MarkDirty(state, index, index + 1);
-                AdvancePlayback(state, parameters.speed);
+                AdvanceErase(state, state.eraseSpeed);
             }
             else if (state.recording)
             {
@@ -575,15 +669,22 @@ class StereoLooper
                 const auto index = static_cast<std::size_t>(position);
                 buffer[index] = input;
                 MarkDirty(state, index, index + 1);
-                const float speed = parameters.speed;
+                const float speed = state.recordSpeed;
                 if (speed != 0.0f)
                 {
                     const double next = state.writePosition + speed;
-                    state.hasWrapped = state.hasWrapped || next < 0.0
-                                    || next >= state.currentLength;
-                    state.writePosition = WrapPosition(
-                        next,
-                        static_cast<double>(state.currentLength));
+                    const double loopLength =
+                        static_cast<double>(state.currentLength);
+                    if ((speed > 0.0f && next >= loopLength)
+                        || (speed < 0.0f && next < 0.0))
+                    {
+                        state.playbackWrapped = true;
+                        state.loopEnded = true;
+                    }
+                    state.writePosition = WrapPosition(next, loopLength);
+
+                    state.phase = static_cast<float>(state.writePosition
+                                                     / loopLength);
                 }
             }
             else
@@ -596,6 +697,29 @@ class StereoLooper
             return input;
         }
         state.erased = eraseNow;
+
+        if (parameters.windowUpdateMode == WindowUpdateMode::Jump
+            && !state.recording
+            && state.windowFadePhase != ChannelState::WindowFadePhase::Idle)
+        {
+            ++state.windowFadeSamples;
+            if (state.windowFadeSamples >= jumpFadeSamples)
+            {
+                if (state.windowFadePhase == ChannelState::WindowFadePhase::Out)
+                {
+                    state.currentStart = targetStart;
+                    state.currentLength = targetLength;
+                    state.currentRegionLength = targetRegionLength;
+                    state.windowFadePhase = ChannelState::WindowFadePhase::In;
+                    state.windowFadeSamples = 0;
+                }
+                else
+                {
+                    state.windowFadePhase = ChannelState::WindowFadePhase::Idle;
+                    state.windowFadeSamples = 0;
+                }
+            }
+        }
         return input * dryGain + wetOutput * wetGain;
     }
 
@@ -623,6 +747,56 @@ class StereoLooper
             }
             state.phase = WrapPhase(next);
         }
+    }
+
+    static void AdvanceErase(ChannelState& state, float speed)
+    {
+        if (speed == 0.0f || state.currentLength <= 0.0f)
+            return;
+
+        const double loopLength = static_cast<double>(state.currentLength);
+        const double next = state.erasePosition + static_cast<double>(speed);
+        if ((speed > 0.0f && next >= loopLength)
+            || (speed < 0.0f && next < 0.0))
+        {
+            state.loopEnded = true;
+            state.playbackWrapped = true;
+        }
+        state.erasePosition = WrapPosition(next, loopLength);
+        state.phase = static_cast<float>(state.erasePosition / loopLength);
+    }
+
+    static float AdvanceReadJitter(ChannelState& state, float amount)
+    {
+        if (amount <= 0.0f)
+        {
+            state.readJitterSamplesRemaining = 0;
+            state.readJitterOffset = 0.0f;
+            state.readJitterTarget = 0.0f;
+            state.readJitterStep = 0.0f;
+            return 0.0f;
+        }
+
+        if (state.readJitterSamplesRemaining == 0)
+        {
+            uint32_t value = state.readJitterRandomState;
+            value ^= value << 13;
+            value ^= value >> 17;
+            value ^= value << 5;
+            state.readJitterRandomState = value == 0 ? 0xA341316CU : value;
+            const float unit = static_cast<float>(value >> 8)
+                             * (1.0f / 16777215.0f);
+            state.readJitterTarget = (unit * 2.0f - 1.0f)
+                                   * 3.0f * amount;
+            state.readJitterSamplesRemaining = 96;
+            state.readJitterStep = (state.readJitterTarget
+                                    - state.readJitterOffset)
+                                 / 96.0f;
+        }
+
+        state.readJitterOffset += state.readJitterStep;
+        --state.readJitterSamplesRemaining;
+        return state.readJitterOffset;
     }
 
     void AdvanceFullErase(ChannelState& state, float* buffer, bool requested)
@@ -656,7 +830,6 @@ class StereoLooper
             state.clearProgress = 0;
             state.phase = 0.0f;
             state.writePosition = 0.0;
-            state.hasWrapped = false;
             state.playbackWrapped = false;
             clearCompleted_ = true;
         }

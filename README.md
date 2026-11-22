@@ -34,12 +34,18 @@ starts in **LR** mode with no loop region. Playback is silent until a loop is
 explicitly recorded. The first **Reverse** recording (button or gate) on an
 empty buffer records from index zero and sets the loop length to the hold
 duration. Releasing Reverse starts playback of that loop. Once a loop exists,
-Reverse overwrites the played region. Hold **Shift+Reverse** to replace an
+Reverse overdubs at the playhead and stays within the active playback window;
+each wrap overwrites that same window again. Hold **Shift+Reverse** to replace an
 existing loop with a new recording from index zero; its duration is the hold
 time. You can press Shift before or after Reverse. Hold **Freeze**
-(or its gate) to erase progressively under the playback head. Input routing is
-direct: L records to the L buffer and R to the R buffer. No audio-level or
-jack-presence heuristic is used.
+(or its gate) to erase progressively under the playback head. Overdub and
+Freeze latch each channel's current playback window and speed when the control
+is pressed, then follow that setting for the duration of the hold. Later
+changes to Start, Length, or Speed affect playback of the resulting loop
+segment. In LR mode both channels begin and end together, with each channel
+using its own latched settings. Input routing is direct: L records to the L
+buffer and R to the R buffer. No audio-level or jack-presence heuristic is
+used.
 The selected mode gates recording and erasing: **L** records/erases only
 `In L`/the L buffer, **R** only `In R`/the R buffer, and **LR** records or
 erases both corresponding channels. The unselected buffer is left unchanged;
@@ -50,7 +56,20 @@ Aurora's knob and CV accessors are independent. Warp controls loop start, Time
 controls loop length from 0 to 100% of the current working-loop duration, Blur
 controls playback speed/direction (including a zero-speed deadband), and Mix
 controls a linear dry/wet blend that cannot boost correlated dry and loop
-signals. Time uses a squared curve over the current working-loop duration.
+signals. Mix's first and last 1% of travel snap to exact dry and wet endpoints.
+Time uses a squared curve over the current working-loop duration.
+
+### Clean default setup
+
+For a clean, full-loop reference, leave CV inputs unpatched and set Start fully
+counter-clockwise, Length fully clockwise, Blur/Speed near `+1×` (about 3
+o'clock in Continuous mode), and Mix fully clockwise. Set Degrade (Reflect) and
+Drop Out (Atmosphere) fully counter-clockwise. At zero, their Shift-controlled
+wet mix and event duration do not enable either effect. Shift alone should not
+change this sound. This setup should record and play back a loop close to the
+input; the normal control values are smoothed over about 20 ms to prevent ADC
+steps from modulating the read window or speed.
+
 Holding Shift+Reverse records from buffer index zero at 1x and captures a new
 working-loop duration. If Shift is released first, ordinary
 Reverse recording continues; when Reverse (button or gate) is released,
@@ -67,23 +86,40 @@ unused remainder of the 40-second backing buffer. At a 100% Time setting and
 50% Warp, playback should play the latter half of the region followed by its
 first half.
 
-Reflect now provides optional 16-to-2-bit quantization on loop playback. The
-Reflect knob sets bit depth; hold Shift and use the same knob to set the
-wet/dry blend from its full physical range. For a clear test, set Reflect
-fully clockwise without Shift, then hold Shift and turn Reflect fully
-clockwise. This keeps the selected bit depth and reaches a fully wet signal.
-Atmosphere schedules optional volume cuts, reverse bursts, sample-rate
-reduction, white or pink noise, and short repeat/stutter events; set Atmosphere
-fully counter-clockwise for bypass. Hold Shift and move Atmosphere to adjust
-event duration. For repeat events, this selects a 5-500 ms slice immediately
-before the playhead; the slice repeats four times while the playhead pauses,
-then playback resumes. Atmosphere events are cancelled during record and
-erase. Effects are not applied to input monitoring or written into the loop
-buffer.
+Hold Shift and move either Warp or Time to toggle the window transition mode
+between Smooth and Jump. This gesture does not change the stored knob value,
+and toggles once per Shift hold. Smooth moves the read window gradually,
+producing tape-style pitch movement. Jump fades the wet signal out over 5 ms,
+moves directly to the new window, then fades back in over 5 ms to avoid clicks.
+Hold Shift and turn Blur to toggle between Continuous and Quantized speed modes.
+The mode stays selected after Shift is released, and the Blur knob continues to
+control speed normally. Continuous mode ranges from `-2×` at minimum through
+`0×` at noon to `+2×` at maximum; `-1×` and `+1×` are approximately at 9 and
+3 o'clock. Quantized mode steps through `-2, -1.5, -1.25, -1, -0.5, -0.25,
+0.01, 0.25, 0.5, 1, 1.25, 1.5, 2×` across the knob travel.
 
-The selected-channel LEDs normally indicate L (green) and R (blue). At each
-channel's loop end, its LED briefly flashes off if that channel is selected,
-or flashes on if it is not selected.
+Degrade (the Reflect control) combines smooth read-head slip, controlled
+random read-head jitter, soft overdrive, and 16-to-2-bit quantization on loop
+playback. Both the jitter amount and bit-depth reduction increase continuously
+with the Degrade knob. Its bottom 2% is a hard bypass to absorb small ADC
+offsets at the knob stop. Hold Shift and use the same control to set its wet/dry
+blend, which defaults to 100% wet. Shift+Degrade changes the blend only after
+you move the knob; pressing Shift alone leaves it unchanged.
+Drop Out (the Atmosphere
+control) schedules volume cuts, sample-rate reduction, white or pink noise,
+and short repeat/stutter events. Four slow
+LFOs modulate the event probabilities from the shared Drop Out baseline; set
+Drop Out fully counter-clockwise for bypass. Hold Shift and move Drop Out to
+adjust event duration. At 1× speed, repeat events select a 10-500 ms slice
+immediately before the playhead. The slice length scales inversely with
+playback speed, up to a 2-second cap; it repeats four times while the playhead
+pauses, then playback resumes. Drop Out events are cancelled during
+record and erase. Effects are not applied to input monitoring or written into
+the loop buffer.
+
+LED 1 glows green in L mode, LED 4 glows blue in R mode, and both glow in LR
+mode. LED 2 flashes green when the L loop restarts; LED 3 flashes blue when
+the R loop restarts.
 
 ## USB persistence (parked)
 
@@ -127,8 +163,8 @@ duration (up to 40 seconds).
 Shift+Freeze on the button starts a bounded, incremental full-buffer erase;
 the loop component is cut immediately, while any dry mix remains audible. The
 full erase clears both channels, stops playback, and removes pending loop-end
-LED flashes; the gate alone does not trigger a full erase. Shift+Reflect sets Reflect's
-wet/dry blend, and Shift+Atmosphere sets the glitch-duration ratio. The Reverse
+LED flashes; the gate alone does not trigger a full erase. Shift+Degrade sets
+the degradation wet/dry blend, and Shift+Drop Out sets the dropout duration ratio. The Reverse
 LED is red only while recording; Freeze indicates erase activity only, blue
 while progressively erasing and magenta during a full erase. Neither LED
 indicates USB or persistence status. Input is monitored at unity while
