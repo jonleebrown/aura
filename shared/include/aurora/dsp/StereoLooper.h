@@ -49,7 +49,10 @@ class StereoLooper
     bool Initialize(float* left,
                     float* right,
                     std::size_t capacity,
-                    std::size_t initialLoopLength)
+                    std::size_t initialLoopLength,
+                    float* leftRepeatBuffer = nullptr,
+                    float* rightRepeatBuffer = nullptr,
+                    std::size_t repeatBufferCapacity = 0)
     {
         if (left == nullptr || right == nullptr || capacity == 0
             || initialLoopLength > capacity)
@@ -60,6 +63,9 @@ class StereoLooper
         capacity_ = capacity;
         legacyStart_ = 0;
         legacyLength_ = initialLoopLength;
+        repeatBuffers_[0] = leftRepeatBuffer;
+        repeatBuffers_[1] = rightRepeatBuffer;
+        repeatBufferCapacity_ = repeatBufferCapacity;
         Clear();
         return true;
     }
@@ -76,6 +82,10 @@ class StereoLooper
         }
         channels_[0] = ChannelState{};
         channels_[1] = ChannelState{};
+        channels_[0].effects.SetRepeatBuffer(repeatBuffers_[0],
+                                             repeatBufferCapacity_);
+        channels_[1].effects.SetRepeatBuffer(repeatBuffers_[1],
+                                             repeatBufferCapacity_);
         channels_[0].effects.Reset(0x13579BDFU);
         channels_[1].effects.Reset(0x2468ACE1U);
         recording_ = false;
@@ -636,6 +646,8 @@ class StereoLooper
 
     float* leftBuffer_ = nullptr;
     float* rightBuffer_ = nullptr;
+    float* repeatBuffers_[2]{};
+    std::size_t repeatBufferCapacity_ = 0;
     std::size_t capacity_ = 0;
     std::size_t legacyStart_ = 0;
     std::size_t legacyLength_ = 0;

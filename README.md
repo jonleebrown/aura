@@ -73,10 +73,13 @@ wet/dry blend from its full physical range. For a clear test, set Reflect
 fully clockwise without Shift, then hold Shift and turn Reflect fully
 clockwise. This keeps the selected bit depth and reaches a fully wet signal.
 Atmosphere schedules optional volume cuts, reverse bursts, sample-rate
-reduction, and white or pink noise events; set Atmosphere fully
-counter-clockwise for bypass. Hold Shift and move Atmosphere to adjust event
-duration. Atmosphere events are cancelled during record and erase. Effects are
-not applied to input monitoring or written into the loop buffer.
+reduction, white or pink noise, and short repeat/stutter events; set Atmosphere
+fully counter-clockwise for bypass. Hold Shift and move Atmosphere to adjust
+event duration. For repeat events, this selects a 5-500 ms slice immediately
+before the playhead; the slice repeats four times while the playhead pauses,
+then playback resumes. Atmosphere events are cancelled during record and
+erase. Effects are not applied to input monitoring or written into the loop
+buffer.
 
 The selected-channel LEDs normally indicate L (green) and R (blue). At each
 channel's loop end, its LED briefly flashes off if that channel is selected,
@@ -252,9 +255,10 @@ crackled and seemed to reduce level, and the Time range felt inconsistent.
 The current update scales Time within the working-loop duration, starts at a
 four-second working loop, uses a peak-safe linear crossfade at loop seams and
 for dry/wet mix, and fades the wet output during progressive erase.
-These changes pass portable tests and the firmware build but await reflash and
-hardware confirmation. Reflect/Atmosphere are not active DSP effects. Full
-40-second capacity and seam behavior remain unverified.
+The repeated playback crackles were traced to precision loss in the recording
+write cursor; a sample-unit cursor fixed the issue, confirmed on hardware.
+Reflect/Atmosphere operate only on loop playback. Full 40-second capacity and
+seam behavior remain unverified.
 
 ## VST test build
 

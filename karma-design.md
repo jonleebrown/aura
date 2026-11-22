@@ -345,9 +345,12 @@ accepted as the clean baseline.
 * Implemented optional Reflect bit reduction with a Shift-controlled wet/dry
   blend. Both controls at zero preserve the clean signal path.
 * Implemented Atmosphere event scheduling for volume cuts, reverse bursts,
-  sample-rate reduction, and white/pink noise. Events are independently
-  randomized per channel, crossfaded over 3 ms, and bounded by the active
-  loop (up to 40 seconds).
+  sample-rate reduction, white/pink noise, and four-cycle repeat/stutter
+  events. Repeat slices span 5-500 ms based on the Shift+Atmosphere duration
+  control; they play from the recent loop history while the playback head is
+  held, then normal playback resumes. Events are independently randomized per
+  channel, crossfaded over 3 ms, and bounded by the active loop (up to 40
+  seconds).
 * Effects process loop playback only. Events are cancelled during recording
   and erasing and when Atmosphere is returned to zero.
 * Added portable tests for bypass behavior, deterministic scheduling,

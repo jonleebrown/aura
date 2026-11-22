@@ -17,7 +17,8 @@ class KarmaEffects
         VolumeCut,
         ReverseBurst,
         SampleRateReduction,
-        Noise
+        Noise,
+        Repeat
     };
 
     struct Parameters
@@ -41,6 +42,16 @@ class KarmaEffects
         float speed;
     };
 
+    void SetRepeatBuffer(float* buffer, std::size_t capacity)
+    {
+        repeatHistory_ = buffer;
+        repeatHistoryCapacity_ = capacity < maximumRepeatSamples_
+                               ? capacity
+                               : maximumRepeatSamples_;
+        historyWriteIndex_ = 0;
+        historySamples_ = 0;
+    }
+
     void Reset(uint32_t seed)
     {
         randomState_ = seed == 0 ? 0x6D2B79F5U : seed;
@@ -50,6 +61,10 @@ class KarmaEffects
         holdSamples_ = 0;
         holdPeriod_ = 4;
         eventCount_ = 0;
+        historyWriteIndex_ = 0;
+        historySamples_ = 0;
+        repeatStartIndex_ = 0;
+        repeatLengthSamples_ = 0;
         heldSample_ = 0.0f;
         pinkState_[0] = 0.0f;
         pinkState_[1] = 0.0f;
@@ -66,6 +81,8 @@ class KarmaEffects
         const float amount = Clamp(parameters.atmosphere);
         const float speed = parameters.speed;
         currentDuration_ = Clamp(parameters.glitchDuration);
+        if (glitch_ != Glitch::Repeat || eventSamples_ == 0)
+            PushHistory(sample);
         if (amount <= 0.0f || parameters.loopSamples == 0)
         {
             CancelGlitch();
@@ -107,6 +124,31 @@ class KarmaEffects
                 case Glitch::Noise:
                     processed += NextNoise() * noiseGain_ * envelope;
                     break;
+                case Glitch::Repeat:
+                {
+                    const std::size_t repeatPosition =
+                        eventPosition_ % repeatLengthSamples_;
+                    float repeated = repeatHistory_[
+                        (repeatStartIndex_ + repeatPosition)
+                        % repeatHistoryCapacity_];
+                    const std::size_t fade = repeatLengthSamples_ / 4 < fadeSamples_
+                                           ? repeatLengthSamples_ / 4
+                                           : fadeSamples_;
+                    if (fade > 0 && repeatPosition < fade)
+                    {
+                        const float progress =
+                            static_cast<float>(repeatPosition + 1)
+                            / static_cast<float>(fade);
+                        const std::size_t tailPosition =
+                            (repeatStartIndex_ + repeatLengthSamples_ - fade
+                             + repeatPosition) % repeatHistoryCapacity_;
+                        repeated = repeatHistory_[tailPosition] * (1.0f - progress)
+                                 + repeated * progress;
+                    }
+                    processed = sample * (1.0f - envelope) + repeated * envelope;
+                    processedSpeed = 0.0f;
+                    break;
+                }
                 case Glitch::None:
                     break;
             }
@@ -133,12 +175,15 @@ class KarmaEffects
              ? eventSamples_ - eventPosition_
              : 0;
     }
+    std::size_t RepeatLengthSamples() const { return repeatLengthSamples_; }
     std::size_t EventCount() const { return eventCount_; }
 
   private:
     static constexpr uint32_t sampleRate_ = 48000;
     static constexpr std::size_t minimumEventSamples_ = 240;
     static constexpr std::size_t fadeSamples_ = 144;
+    static constexpr std::size_t maximumRepeatSamples_ = sampleRate_ / 2;
+    static constexpr std::size_t repeatCount_ = 4;
     static constexpr std::size_t maximumLoopSamples_ = 40U * sampleRate_;
 
     static float Clamp(float value)
@@ -183,22 +228,49 @@ class KarmaEffects
         const std::size_t boundedLoop = loopSamples < maximumLoopSamples_
                                       ? loopSamples
                                       : maximumLoopSamples_;
-        const float durationRatio = 0.001f + Clamp(currentDuration_) * 0.999f;
-        const float durationJitter = 0.5f + RandomUnit();
-        const float requested = static_cast<float>(boundedLoop)
-                              * durationRatio * durationJitter;
-        eventSamples_ = static_cast<std::size_t>(requested);
-        if (eventSamples_ < minimumEventSamples_)
-            eventSamples_ = boundedLoop < minimumEventSamples_
-                          ? boundedLoop
-                          : minimumEventSamples_;
-        if (eventSamples_ > boundedLoop)
-            eventSamples_ = boundedLoop;
-        if (eventSamples_ == 0)
-            return;
-
-        switch (NextRandom() % 4U)
+        const auto selected = NextRandom() % 5U;
+        if (selected == 4U)
         {
+            if (historySamples_ == 0)
+                return;
+            const float durationMs = 5.0f + Clamp(currentDuration_) * 495.0f;
+            const std::size_t requested = static_cast<std::size_t>(
+                durationMs * static_cast<float>(sampleRate_) / 1000.0f + 0.5f);
+            repeatLengthSamples_ = requested;
+            if (repeatLengthSamples_ > maximumRepeatSamples_)
+                repeatLengthSamples_ = maximumRepeatSamples_;
+            if (repeatLengthSamples_ > boundedLoop)
+                repeatLengthSamples_ = boundedLoop;
+            if (repeatLengthSamples_ == 0
+                || historySamples_ < repeatLengthSamples_)
+            {
+                repeatLengthSamples_ = 0;
+                return;
+            }
+            repeatStartIndex_ = (historyWriteIndex_ + repeatHistoryCapacity_
+                                 - repeatLengthSamples_)
+                              % repeatHistoryCapacity_;
+            eventSamples_ = repeatLengthSamples_ * repeatCount_;
+            glitch_ = Glitch::Repeat;
+        }
+        else
+        {
+            const float durationRatio = 0.001f + Clamp(currentDuration_) * 0.999f;
+            const float durationJitter = 0.5f + RandomUnit();
+            const float requested = static_cast<float>(boundedLoop)
+                                  * durationRatio * durationJitter;
+            eventSamples_ = static_cast<std::size_t>(requested);
+            if (eventSamples_ < minimumEventSamples_)
+                eventSamples_ = boundedLoop < minimumEventSamples_
+                              ? boundedLoop
+                              : minimumEventSamples_;
+            if (eventSamples_ > boundedLoop)
+                eventSamples_ = boundedLoop;
+            if (eventSamples_ == 0)
+                return;
+
+            switch (selected)
+            {
             case 0:
                 glitch_ = Glitch::VolumeCut;
                 volumeGain_ = (NextRandom() & 1U) == 0 ? 0.0f : 0.25f;
@@ -217,9 +289,20 @@ class KarmaEffects
                 noiseGain_ = 0.2f + RandomUnit() * 0.3f;
                 pinkNoise_ = (NextRandom() & 1U) != 0;
                 break;
+            }
         }
         eventPosition_ = 0;
         ++eventCount_;
+    }
+
+    void PushHistory(float sample)
+    {
+        if (repeatHistory_ == nullptr || repeatHistoryCapacity_ == 0)
+            return;
+        repeatHistory_[historyWriteIndex_] = sample;
+        historyWriteIndex_ = (historyWriteIndex_ + 1) % repeatHistoryCapacity_;
+        if (historySamples_ < repeatHistoryCapacity_)
+            ++historySamples_;
     }
 
     float EventEnvelope() const
@@ -260,6 +343,7 @@ class KarmaEffects
         eventSamples_ = 0;
         eventPosition_ = 0;
         holdSamples_ = 0;
+        repeatLengthSamples_ = 0;
         glitch_ = Glitch::None;
     }
 
@@ -268,6 +352,7 @@ class KarmaEffects
         eventSamples_ = 0;
         eventPosition_ = 0;
         holdSamples_ = 0;
+        repeatLengthSamples_ = 0;
         glitch_ = Glitch::None;
     }
 
@@ -278,12 +363,18 @@ class KarmaEffects
     std::size_t holdSamples_ = 0;
     std::size_t holdPeriod_ = 4;
     std::size_t eventCount_ = 0;
+    std::size_t historyWriteIndex_ = 0;
+    std::size_t historySamples_ = 0;
+    std::size_t repeatHistoryCapacity_ = 0;
+    std::size_t repeatStartIndex_ = 0;
+    std::size_t repeatLengthSamples_ = 0;
     float heldSample_ = 0.0f;
     float volumeGain_ = 0.0f;
     float speedSign_ = 1.0f;
     float noiseGain_ = 0.0f;
     float currentDuration_ = 0.5f;
     float pinkState_[3]{};
+    float* repeatHistory_ = nullptr;
     Glitch glitch_ = Glitch::None;
     bool pinkNoise_ = false;
 };

@@ -535,8 +535,12 @@ void TestAtmosphereIsBypassedAndDeterministic()
 
     parameters.atmosphere = 1.0f;
     parameters.glitchDuration = 0.001f;
+    std::vector<float> repeatHistoryFirst(24000);
+    std::vector<float> repeatHistorySecond(24000);
     Effects first;
     Effects second;
+    first.SetRepeatBuffer(repeatHistoryFirst.data(), repeatHistoryFirst.size());
+    second.SetRepeatBuffer(repeatHistorySecond.data(), repeatHistorySecond.size());
     first.Reset(9876U);
     second.Reset(9876U);
     for (int index = 0; index < 12000; ++index)
@@ -545,8 +549,12 @@ void TestAtmosphereIsBypassedAndDeterministic()
         const auto right = second.Process(0.25f, parameters);
         Require(Near(left.sample, right.sample) && Near(left.speed, right.speed),
                 "per-channel effect state is reproducible with a fixed seed");
-        Require(first.RemainingEventSamples() <= parameters.loopSamples,
-                "Atmosphere event duration stays bounded by the active loop");
+        const std::size_t durationLimit =
+            first.ActiveGlitch() == Effects::Glitch::Repeat
+                ? parameters.loopSamples * 4
+                : parameters.loopSamples;
+        Require(first.RemainingEventSamples() <= durationLimit,
+                "Atmosphere event duration stays within its type-specific bound");
     }
     Require(first.EventCount() > 0,
             "Atmosphere probability schedules events when engaged");
@@ -555,16 +563,18 @@ void TestAtmosphereIsBypassedAndDeterministic()
 void TestAtmosphereTransformationCoverage()
 {
     using Effects = aurora::dsp::KarmaEffects;
-    bool seen[5]{};
+    bool seen[6]{};
     Effects::Parameters parameters;
     parameters.atmosphere = 1.0f;
     parameters.glitchDuration = 0.001f;
     parameters.speed = 1.0f;
     parameters.loopSamples = 240;
+    std::vector<float> repeatHistory(24000);
 
     for (uint32_t seed = 1; seed <= 64; ++seed)
     {
         Effects effects;
+        effects.SetRepeatBuffer(repeatHistory.data(), repeatHistory.size());
         effects.Reset(seed);
         for (int sample = 0; sample < 2400; ++sample)
         {
@@ -586,6 +596,113 @@ void TestAtmosphereTransformationCoverage()
             "Atmosphere can schedule sample-rate reduction");
     Require(seen[static_cast<std::size_t>(Effects::Glitch::Noise)],
             "Atmosphere can schedule noise events");
+    Require(seen[static_cast<std::size_t>(Effects::Glitch::Repeat)],
+            "Atmosphere can schedule micro-loop repeats");
+}
+
+void TestRepeatMicroLoopDurationRange()
+{
+    using Effects = aurora::dsp::KarmaEffects;
+    const float durations[] = {0.0f, 1.0f};
+    std::vector<float> repeatHistory(24000);
+    for (float duration : durations)
+    {
+        bool foundExpectedDuration = false;
+        for (uint32_t seed = 1; seed <= 256 && !foundExpectedDuration; ++seed)
+        {
+            Effects effects;
+            effects.SetRepeatBuffer(repeatHistory.data(), repeatHistory.size());
+            effects.Reset(seed);
+            Effects::Parameters parameters;
+            parameters.loopSamples = 48000;
+            parameters.glitchDuration = duration;
+            for (std::size_t sampleIndex = 0; sampleIndex < 24000; ++sampleIndex)
+            {
+                parameters.atmosphere = 0.0f;
+                effects.Process(static_cast<float>(sampleIndex % 257) / 257.0f,
+                                parameters);
+            }
+
+            parameters.atmosphere = 1.0f;
+            for (std::size_t sampleIndex = 0;
+                 sampleIndex < 12000 && !foundExpectedDuration;
+                 ++sampleIndex)
+            {
+                const auto result = effects.Process(0.25f, parameters);
+                if (effects.ActiveGlitch() == Effects::Glitch::Repeat)
+                {
+                    const std::size_t expectedLength = duration == 0.0f
+                                                     ? 240
+                                                     : 24000;
+                    Require(effects.RepeatLengthSamples() == expectedLength,
+                            "repeat micro-loop length maps from 5 ms to 500 ms");
+                    Require(result.speed == 0.0f,
+                            "repeat event holds the playback head in place");
+                    Require(effects.RemainingEventSamples()
+                                <= expectedLength * 4,
+                            "repeat event is limited to four micro-loop cycles");
+                    foundExpectedDuration = true;
+                }
+            }
+        }
+        Require(foundExpectedDuration,
+                "a deterministic seed schedules a repeat event for duration endpoint");
+    }
+}
+
+void TestRepeatCyclesCapturedLoopHistory()
+{
+    using Effects = aurora::dsp::KarmaEffects;
+    constexpr std::size_t repeatLength = 240;
+    constexpr std::size_t repeatEventLength = repeatLength * 4;
+    std::vector<float> repeatHistory(24000);
+    bool verified = false;
+    for (uint32_t seed = 1; seed <= 256 && !verified; ++seed)
+    {
+        Effects effects;
+        effects.SetRepeatBuffer(repeatHistory.data(), repeatHistory.size());
+        effects.Reset(seed);
+        Effects::Parameters parameters;
+        parameters.loopSamples = 48000;
+        parameters.glitchDuration = 0.0f;
+        for (std::size_t sampleIndex = 0; sampleIndex < repeatHistory.size(); ++sampleIndex)
+        {
+            parameters.atmosphere = 0.0f;
+            effects.Process(static_cast<float>(sampleIndex % repeatLength)
+                                / static_cast<float>(repeatLength),
+                            parameters);
+        }
+
+        parameters.atmosphere = 1.0f;
+        for (std::size_t sampleIndex = 0;
+             sampleIndex < 12000 && !verified;
+             ++sampleIndex)
+        {
+            const float source = static_cast<float>(sampleIndex % repeatLength)
+                               / static_cast<float>(repeatLength);
+            const auto result = effects.Process(source, parameters);
+            if (effects.ActiveGlitch() != Effects::Glitch::Repeat)
+                continue;
+
+            float repeatedOutput[repeatEventLength]{};
+            repeatedOutput[0] = result.sample;
+            for (std::size_t index = 1; index < repeatEventLength; ++index)
+            {
+                const auto repeatResult = effects.Process(source, parameters);
+                Require(repeatResult.speed == 0.0f,
+                        "repeat keeps the playback head fixed for all cycles");
+                repeatedOutput[index] = repeatResult.sample;
+            }
+            for (std::size_t index = 150; index < repeatLength; ++index)
+                Require(Near(repeatedOutput[index],
+                             repeatedOutput[index + repeatLength])
+                            && Near(repeatedOutput[index],
+                                    repeatedOutput[index + 2 * repeatLength]),
+                        "micro-loop cycles repeat the same captured samples");
+            verified = true;
+        }
+    }
+    Require(verified, "repeat event can be observed for deterministic seeds");
 }
 
 void TestAtmosphereEventsCancelCleanly()
@@ -886,6 +1003,8 @@ int main()
     TestReflectBitReductionIsOptIn();
     TestAtmosphereIsBypassedAndDeterministic();
     TestAtmosphereTransformationCoverage();
+    TestRepeatMicroLoopDurationRange();
+    TestRepeatCyclesCapturedLoopHistory();
     TestAtmosphereEventsCancelCleanly();
     TestPcmWavFormatAndConversion();
     TestFirstRecordCreatesLoopFromEmptyBuffer();

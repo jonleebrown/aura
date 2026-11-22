@@ -30,9 +30,12 @@ Hardware hardware;
 constexpr bool usbPersistenceEnabled = false;
 constexpr std::size_t sampleRate = 48000;
 constexpr std::size_t maxLoopSamples = 40U * sampleRate;
+constexpr std::size_t maxRepeatSamples = sampleRate / 2;
 std::size_t workingLoopSamples = 0;
 float loopBufferLeft[maxLoopSamples] DSY_SDRAM_BSS;
 float loopBufferRight[maxLoopSamples] DSY_SDRAM_BSS;
+float repeatBufferLeft[maxRepeatSamples] DSY_SDRAM_BSS;
+float repeatBufferRight[maxRepeatSamples] DSY_SDRAM_BSS;
 aurora::dsp::StereoLooper looper;
 aurora::dsp::KarmaControlState controlState;
 volatile bool recording_status = false;
@@ -902,7 +905,10 @@ int main(void)
         || !looper.Initialize(loopBufferLeft,
                               loopBufferRight,
                               maxLoopSamples,
-                              0))
+                              0,
+                              repeatBufferLeft,
+                              repeatBufferRight,
+                              maxRepeatSamples))
     {
         hardware.SetLed(LED_1, 1.0f, 0.0f, 0.0f);
         hardware.WriteLeds();
