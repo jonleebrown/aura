@@ -234,12 +234,15 @@ LooperParameters MakeLooperParameters(std::size_t channel,
     parameters.pan = controls.pan;
     parameters.reflect = controls.controls[ControlState::Reflect];
     parameters.reflectMix = controls.crushMix;
+    // Reflect controls the paired read-head slip and bit-crush amount.
+    parameters.slippage = parameters.reflect;
     parameters.atmosphere = controls.controls[ControlState::Atmosphere];
     parameters.glitchDuration = controls.glitchDuration;
 #if defined(AURORA_DIAGNOSTIC) && (AURORA_DIAGNOSTIC == 10 || AURORA_DIAGNOSTIC == 11)
     parameters.mix = 1.0f;
     parameters.reflect = 0.0f;
     parameters.reflectMix = 0.0f;
+    parameters.slippage = 0.0f;
     parameters.atmosphere = 0.0f;
 #endif
     parameters.record = active && record && !clearAll;

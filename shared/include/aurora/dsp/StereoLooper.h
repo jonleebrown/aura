@@ -28,6 +28,8 @@ class StereoLooper
         bool clearAll = false;
         float reflect = 0.0f;
         float reflectMix = 0.0f;
+        // Read-head slip amount, normalized from 0 (off) to 1 (full).
+        float slippage = 0.0f;
         float atmosphere = 0.0f;
         float glitchDuration = 0.5f;
     };
@@ -270,6 +272,7 @@ class StereoLooper
     struct ChannelState
     {
         float phase = 0.0f;
+        float slipPhase = 0.0f;
         float recordStartPhase = 0.0f;
         double writePosition = 0.0;
         float currentStart = 0.0f;
@@ -295,6 +298,8 @@ class StereoLooper
 
     static constexpr float halfPi = 1.57079632679489661923f;
     static constexpr float windowSlewSamples = 240.0f;
+    static constexpr float readSlipMaxSamples = 8.0f;
+    static constexpr float readSlipPhaseStep = 0.0000654498469498f;
 
     static float Clamp(float value)
     {
@@ -502,7 +507,20 @@ class StereoLooper
         float wet = 0.0f;
         float playbackSpeed = parameters.speed;
         if (state.currentLength > 0.0f)
-            wet = ReadWindow(buffer, state.phase, state, parameters.speed);
+        {
+            const float slippage = Clamp(parameters.slippage);
+            const float slipOffset = std::sin(state.slipPhase)
+                                   * readSlipMaxSamples * slippage;
+            const float readPhase = WrapPhase(
+                state.phase + slipOffset / state.currentLength);
+            wet = ReadWindow(buffer, readPhase, state, parameters.speed);
+            if (!state.recording && slippage > 0.0f)
+            {
+                state.slipPhase += readSlipPhaseStep;
+                if (state.slipPhase >= 2.0f * 3.14159265358979323846f)
+                    state.slipPhase -= 2.0f * 3.14159265358979323846f;
+            }
+        }
         if (!state.recording && !eraseNow && state.currentLength > 0.0f)
         {
             KarmaEffects::Parameters effectParameters;
