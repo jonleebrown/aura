@@ -1,0 +1,253 @@
+# Karma Aurora Test Bed
+
+This repository is a test bed for developing firmware and a matching VST
+instrument/effect for the Qu-Bit Electronix Aurora eurorack module. Aurora is
+Daisy-based; the hardware firmware uses the Aurora SDK and libDaisy, while the
+desktop plugin uses JUCE. Platform-independent DSP can be shared between the
+two adapters as Karma develops.
+
+The former frequency-modulation/cross-modulation prototype has been removed.
+The Aurora firmware now contains the Phase 2 Karma looper controls and Phase 3
+optional playback effects; the separate VST test harness remains pass-through
+and is not part of the Aurora build.
+
+## Aurora firmware
+
+Requirements: the Daisy ARM toolchain, the Aurora SDK, libDaisy, and DaisySP.
+The SDK and its dependencies are tracked as nested Git submodules under `lib/`.
+Initialize them after cloning with:
+
+```sh
+git clone --recurse-submodules <repository-url>
+# Or, for an existing checkout:
+git submodule update --init --recursive
+```
+
+The regular build/flash script builds and flashes the current Karma firmware:
+
+```sh
+./scripts/flash-aurora-dfu.sh
+```
+
+The default firmware initializes SDRAM and clears two 40-second buffers. It
+starts in **LR** mode with no loop region. Playback is silent until a loop is
+explicitly recorded. The first **Reverse** recording (button or gate) on an
+empty buffer records from index zero and sets the loop length to the hold
+duration. Releasing Reverse starts playback of that loop. Once a loop exists,
+Reverse overwrites the played region. Hold **Shift+Reverse** to replace an
+existing loop with a new recording from index zero; its duration is the hold
+time. You can press Shift before or after Reverse. Hold **Freeze**
+(or its gate) to erase progressively under the playback head. Input routing is
+direct: L records to the L buffer and R to the R buffer. No audio-level or
+jack-presence heuristic is used.
+The selected mode gates recording and erasing: **L** records/erases only
+`In L`/the L buffer, **R** only `In R`/the R buffer, and **LR** records or
+erases both corresponding channels. The unselected buffer is left unchanged;
+stereo playback and output remain available in every mode.
+
+The six knob/CV pairs are combined in software as `clamp(knob + CV, 0, 1)`;
+Aurora's knob and CV accessors are independent. Warp controls loop start, Time
+controls loop length from 0 to 100% of the current working-loop duration, Blur
+controls playback speed/direction (including a zero-speed deadband), and Mix
+controls a linear dry/wet blend that cannot boost correlated dry and loop
+signals. Time uses a squared curve over the current working-loop duration.
+Holding Shift+Reverse records from buffer index zero at 1x and captures a new
+working-loop duration. If Shift is released first, ordinary
+Reverse recording continues; when Reverse (button or gate) is released,
+playback snaps to the captured region. In L or R mode,
+Time follows the knob directly over the full range. In LR mode, moving a
+control applies a clamped offset to each channel's stored setting, so its
+travel is relative to the values latched on entering LR mode. Window changes
+are slewed during playback, and the loop seam has a short crossfade. During
+recording, the current write window stays fixed; Warp and Time changes apply
+immediately on ordinary Record release using the current working-loop size.
+If the selected start plus length crosses the end of the active working-loop
+region, playback wraps to the beginning of that region; it does not read the
+unused remainder of the 40-second backing buffer. At a 100% Time setting and
+50% Warp, playback should play the latter half of the region followed by its
+first half.
+
+Reflect now provides optional 16-to-2-bit quantization on loop playback. The
+Reflect knob sets bit depth; hold Shift and use the same knob to set the
+wet/dry blend from its full physical range. For a clear test, set Reflect
+fully clockwise without Shift, then hold Shift and turn Reflect fully
+clockwise. This keeps the selected bit depth and reaches a fully wet signal.
+Atmosphere schedules optional volume cuts, reverse bursts, sample-rate
+reduction, and white or pink noise events; set Atmosphere fully
+counter-clockwise for bypass. Hold Shift and move Atmosphere to adjust event
+duration. Atmosphere events are cancelled during record and erase. Effects are
+not applied to input monitoring or written into the loop buffer.
+
+The selected-channel LEDs normally indicate L (green) and R (blue). At each
+channel's loop end, its LED briefly flashes off if that channel is selected,
+or flashes on if it is not selected.
+
+## USB persistence (parked)
+
+USB loop persistence is disabled in the current firmware: it does not read a
+file at startup, write audio to disk, or create a log file. Recorded loops
+remain in RAM until power-off. The earlier WAV load/save and `KARMA.LOG`
+implementation is retained in the source for later experimentation, but it
+caused unwanted playback interruption and is not active.
+
+The previous build did not guarantee `KARMA.LOG` would appear. Logging was
+best-effort: it silently returned if opening the log failed and ignored write,
+sync, and close failures. It only attempted a log write after a storage
+operation had run, which depended on USB being reported ready. Thus an empty
+drive or Freeze LED alone could not show whether logging was attempted or why
+it failed. The current build avoids that USB activity entirely.
+
+With Reflect bypassed, the clean DSP path contains no intentional saturation
+or bit crushing. The previous equal-power dry/wet and seam blends could add up
+to 3 dB when their signals
+were correlated, so the clean default now uses linear blends. This addresses a
+specific possible source of overdrive, but the hardware crackle is not yet
+confirmed fixed. The latest hardware report says pass-through remains fine,
+but loop playback is still louder and "squelchy." The latest report adds that
+full-wet Mix sounds too loud, while a Mix position around 2 o'clock seems less
+squelchy; the cause remains unknown. No output attenuation has been added
+pending more level-matched hardware testing, since the user also likes the
+possibility of intentionally overdriving the sound. This character is not
+enabled intentionally; keep Reflect's blend at zero and Atmosphere fully
+counter-clockwise to hear the clean path. Root-cause diagnosis is deferred
+until after playback behavior is stable.
+
+Tap **Shift** (hold for less than 300 ms, without changing a secondary control)
+to cycle modes. The firmware starts in LR to retain Phase 1 stereo behavior;
+the cycle is LR → L → R → LR. LED 1 green indicates L, LED 2 blue indicates R,
+and both indicate LR. Hold Shift with Mix to pan; Shift+Reverse records at 1x
+from the start of the buffer and sets the working-loop duration to the held
+duration (up to 40 seconds).
+Shift+Freeze on the button starts a bounded, incremental full-buffer erase;
+the loop component is cut immediately, while any dry mix remains audible. The
+full erase clears both channels, stops playback, and removes pending loop-end
+LED flashes; the gate alone does not trigger a full erase. Shift+Reflect sets Reflect's
+wet/dry blend, and Shift+Atmosphere sets the glitch-duration ratio. The Reverse
+LED is red only while recording; Freeze indicates erase activity only, blue
+while progressively erasing and magenta during a full erase. Neither LED
+indicates USB or persistence status. Input is monitored at unity while
+recording, and the Aurora build does not build or flash the VST.
+
+Optional hardware checks can still be selected with `DIAGNOSTIC`:
+
+```sh
+# Audio callback/input activity
+DIAGNOSTIC=1 ./scripts/flash-aurora-dfu.sh
+
+# 440 Hz tone
+DIAGNOSTIC=2 ./scripts/flash-aurora-dfu.sh
+
+# Right input to both outputs at 4x gain (start mixer low)
+DIAGNOSTIC=3 ./scripts/flash-aurora-dfu.sh
+
+# Mix/Blur knob readings
+DIAGNOSTIC=5 ./scripts/flash-aurora-dfu.sh
+
+# Stereo inputs to outputs at 8x gain (start source and mixer low)
+DIAGNOSTIC=6 ./scripts/flash-aurora-dfu.sh
+
+# SDRAM and callback-block-size diagnostic
+DIAGNOSTIC=7 ./scripts/flash-aurora-dfu.sh
+
+# Mix knob and bipolar CV readings
+DIAGNOSTIC=8 ./scripts/flash-aurora-dfu.sh
+
+# USB mass-storage presence/readiness (connect a drive to Aurora)
+DIAGNOSTIC=9 ./scripts/flash-aurora-dfu.sh
+```
+
+Diagnostics 3 and 6 can clip; start with low source and mixer levels.
+Diagnostic 7 uses LED 1 green/red for SDRAM pass/fail, and LED 2 blue for
+48-sample blocks, green for 96, or red for another block size. The Freeze LED
+indicates audio callback activity. In diagnostic 8, LED 1 displays Mix knob
+level and LED 2 shows bipolar CV polarity. In diagnostic 9, LEDs 1 and 2 show
+USB device presence and readiness, respectively. Initial hardware testing
+reported diagnostic 7 all green (SDRAM passed, 96-sample blocks, callback
+active) and independent knob/CV readings in diagnostic 8. Diagnostic 9
+initially showed both LEDs red when the drive was connected after flashing;
+reflashing with the drive already connected produced both green LEDs (present
+and ready). Hot-plug was then confirmed: with Aurora running diagnostic 9 and
+no drive, both LEDs were red; connecting the drive changed them to green;
+removing it returned them to red; reconnecting changed them to green again.
+
+To test hot-plug, flash diagnostic 9 with no USB storage device connected.
+Leave Aurora powered and the diagnostic running: LEDs 1 and 2 should start red.
+Connect the drive without resetting or reflashing, then wait several seconds;
+LED 1 should turn green when it is detected and LED 2 green when it is ready.
+Unplug and reconnect the drive while leaving Aurora powered. The LEDs should
+return to red and then green/green again. If they only change after a restart,
+hot-plug enumeration is not working. This sequence has now been confirmed on
+the target module.
+
+The flash script uses the Daisy bootloader (`0483:df11`), not STM32 ROM DFU.
+Keep the Daisy connected to the computer's USB device port, restart with RESET,
+then press BOOT while the bootloader's pulsing grace-period LED pattern is
+active. `dfu-util` is required; on macOS, install it with `brew install
+dfu-util`. The firmware uses `APP_TYPE=BOOT_SRAM` and is written to QSPI at
+`0x90040000`.
+
+To build without flashing, run `./scripts/build-aurora.sh`. To stage the binary
+on the Aurora USB update volume, first build and then run:
+
+```sh
+./scripts/stage-aurora-firmware.sh /Volumes/AURORA
+```
+
+The staged binary is `Karma.bin`; safely eject the drive, insert it into Aurora,
+and power-cycle the module. Override the ARM toolchain path with
+`GCC_PATH=/path/to/gcc-arm-none-eabi/bin`.
+
+Run portable looper/control tests with `make test`. For Phase 2 hardware
+testing, flash with `./scripts/flash-aurora-dfu.sh`. For L mode, patch a source
+to In L and monitor Out L; for R mode use In R and Out R. LR uses both direct
+routes. Check recording with Mix fully wet for playback and test Freeze erase
+at full wet to distinguish erased content from the dry input. Tap Shift
+through LR, L, and R; record and erase in each mode. Test
+Warp and Time changes, Blur forward/reverse/stop, Shift+Mix panning,
+Shift+Reverse length capture, and Shift+Freeze full erase. The earlier Phase 1
+hardware checks reported clear playback, working Mix, and working playback
+Plus progressive erase. Initial Phase 2 hardware feedback: L/R-mode recording
+was not apparent while LR recording worked; playback sounded rough, Freeze
+crackled and seemed to reduce level, and the Time range felt inconsistent.
+The current update scales Time within the working-loop duration, starts at a
+four-second working loop, uses a peak-safe linear crossfade at loop seams and
+for dry/wet mix, and fades the wet output during progressive erase.
+These changes pass portable tests and the firmware build but await reflash and
+hardware confirmation. Reflect/Atmosphere are not active DSP effects. Full
+40-second capacity and seam behavior remain unverified.
+
+## VST test build
+
+The JUCE VST3 currently provides stereo pass-through and an Aurora-style
+layout as a desktop test harness. It does not yet contain the Karma looper.
+Build/install it separately with:
+
+```sh
+./scripts/build-vst.sh
+```
+
+Requirements: CMake 3.22+, a C++17 compiler, and JUCE 9 (or compatible). Set
+`JUCE_SOURCE_DIR` if JUCE is not at the default local path. JUCE licensing
+terms apply; review the [JUCE license](https://github.com/juce-framework/JUCE/blob/master/LICENSE.md)
+before distributing the plugin.
+
+In VS Code, `Cmd+Shift+B` runs **Build & Flash Aurora Firmware**. Choose
+**Build & Stage Aurora Firmware** from `Terminal > Run Task...` for the USB-drive
+update path, or **Build and Install VST3** for the desktop harness.
+
+## Resources
+
+The [`reference-docs/`](./reference-docs/) directory indexes project
+documentation and external references for Aurora, alternate firmware, JUCE,
+and Daisy/libDaisy.
+
+## Status
+
+Phase 0 diagnostics and Phase 1 stereo looper were hardware-tested. Phase 2
+mode selection, per-channel controls, loop-window/speed controls, and Shift
+transport gestures are implemented and covered by portable tests; Phase 3
+effects are implemented, with Atmosphere heard on hardware and Reflect still
+awaiting a clearer check. USB WAV persistence is implemented but parked and
+disabled because file I/O interrupted playback; the active firmware performs
+no USB reads or writes. The Karma looper in the JUCE harness remains
+unimplemented.
