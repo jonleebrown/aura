@@ -412,6 +412,117 @@ same USB device being diagnosed.
 **Exit check:** the documented design is usable on hardware, with known
 limitations and supported WAV/media behavior recorded here.
 
+## v0.2 Goal: Expressive Overdubbing and Time Manipulation
+
+This is a planning goal; the behavior below is not implemented yet. It builds
+on the existing L/R/LR channel selection and keeps input monitoring, buffer
+writing, and playback effects as distinct signal paths.
+
+### Overdub blend (planned replacement for Shift+Mix pan)
+
+Replace Shift+Mix panning with an overdub blend control. Keep the unshifted
+Mix knob as the live dry-input versus loop-playback monitoring control. The
+Shift+Mix value affects only what is written into the loop while Reverse is
+held:
+
+* **Minimum:** write the external input only. This is the current punch-in
+  behavior: the recorded span is replaced by input audio.
+* **Maximum:** write the loop's existing playback after its enabled effects,
+  with no external input contribution.
+* **Between:** linearly blend external input and the effected loop return.
+
+Treat the shifted value as a `loop-return` weight: `write = input * (1 - w) +
+effected_loop * w`. Do not fold the monitoring Mix into this formula. L and R
+mode write only to their selected channel; LR writes both channels over the
+same held time span, using each channel's own playback state. At the maximum,
+the loop is being reprocessed and replaced rather than accumulated, so repeated
+passes may progressively compound Degrade and other effects. Test for runaway
+gain and unexpected feedback before choosing any limiter or gain policy.
+
+### FX control mode (mapping still to be designed)
+
+Add an FX mode alongside L, R, and LR. The proposed physical-control split is
+Warp, Blur, and Mix for the left-channel FX controls, and Time, Reflect, and
+Atmosphere for the right-channel FX controls. Initially, prioritize independent
+Drop Out control; decide separately whether Degrade also gets independent
+controls. The exact parameter assigned to each knob, how FX mode is entered
+and exited, and whether it preserves the current L/R/LR selection remain open
+design decisions. Prefer treating FX as a control-bank mode that does not
+change which channels are sounding or being recorded; this avoids mixing up
+control focus with audio-channel selection.
+
+### Recording the effected signal
+
+Add an FX overdub path so Reverse can write the processed loop signal into the
+buffer, in addition to the existing external-input punch-in. Respect L/R/LR
+target selection and the LR shared press/release timing. Apply each effect
+once to the signal being written; avoid accidentally processing it again on
+the monitor path while Reverse is held. Decide whether “effected signal” means
+the effected loop return, external input processed before writing, or both;
+these require different signal paths. Define how the overdub blend selects
+between the chosen sources, and verify that an effect event or its state
+cannot leak from one channel into the other. The maximum loop-return blend
+described above is one form of FX overdubbing, not a separate second blend.
+
+### Pickup when changing control layers
+
+Add soft pickup independently for each physical knob and control context
+(normal, Shift secondary, and any FX control bank). After a layer or channel
+selection changes, keep its stored parameter fixed until the physical knob
+reaches or crosses that parameter's stored control position; then resume
+continuous tracking. Define pickup targets for LR offsets and for controls
+whose physical mapping changes by mode. This prevents releasing Shift or
+switching modes from snapping the unshifted parameter to the knob's current
+position. Mode feedback should also indicate when a control is waiting for
+pickup.
+
+### Overdub latency compensation
+
+Measure the round-trip delay of the intended overdub route before advancing
+the write position. A fixed sample offset can align a stable external
+output-to-input loop, but it cannot correct frequency-dependent phase shift
+from effects or a time-stretch algorithm. Keep direct-input punch-in at zero
+compensation unless measurement shows it needs adjustment. Validate with an
+impulse or correlation-based loopback measurement, then test alignment across
+speed, direction, and effect settings; make any user trim a bounded sample
+offset rather than assuming one setting fits every signal path.
+
+### Pitch-independent stretch prototype
+
+Prototype a pitch-independent stretch mode while retaining varispeed for
+immediate tape-like pitch changes. Prioritize responsive forward/reverse
+scrubbing, smooth zero-speed behavior, and stable control changes. [Bungee](https://github.com/bungee-audio-stretch/bungee)
+is a promising first candidate: its documented granular API exposes per-grain
+position and pitch, and it supports continuously changing, zero, and negative
+playback speeds. [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch)
+is a useful comparison for quality and resource use, though its project
+documentation says time-stretching sounds best over more modest rate changes
+(about 0.75x–1.5x), while supporting wider pitch shifts. Before selecting
+either library, benchmark stereo CPU load, memory, latency, licensing, and
+control response on the STM32H750. Keep the
+current playback path available as a fallback and do not add a library to the
+firmware until a hardware prototype meets those constraints.
+
+### Suggested implementation order and acceptance checks
+
+1. Specify and measure record-layer pickup behavior, including Shift release
+   and LR offsets.
+2. Implement the overdub blend and confirm its endpoints, monitoring
+   independence, channel targeting, and stable output level.
+3. Add effected-signal overdubbing, then measure and expose compensation only
+   for routes where a repeatable delay exists.
+4. Finalize the FX control-bank mapping and add Drop Out controls first; add
+   separate Degrade controls only after the interaction is clear.
+5. Build a standalone stretch prototype and compare Bungee and Signalsmith on
+   real recorded material before integrating one into the looper.
+
+**v0.2 exit check:** knob-layer and channel changes do not cause parameter
+jumps; overdub blend endpoints are predictable and independent of monitoring
+Mix; external-input and effected-signal overdubs target the selected channels
+without unintended cross-channel writes; compensation is based on measured
+latency; and any stretch mode maintains the desired scrub response within
+measured CPU, memory, and latency budgets.
+
 ### Initial implementation risks and assumptions
 
 * `BOOT_SRAM` startup must be checked carefully: the normal Daisy Seed init
