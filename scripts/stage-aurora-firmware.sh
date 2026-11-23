@@ -3,21 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 mount_path="${1:-${AURORA_USB_MOUNT:-}}"
-case "${DIAGNOSTIC:-0}" in
-    0) firmware_build_dir="build" ;;
-    1) firmware_build_dir="build-diagnostic-pass" ;;
-    2) firmware_build_dir="build-diagnostic-tone" ;;
-    3) firmware_build_dir="build-diagnostic-boost" ;;
-    5) firmware_build_dir="build-diagnostic-controls" ;;
-    6) firmware_build_dir="build-diagnostic-8x" ;;
-    7) firmware_build_dir="build-diagnostic-sdram" ;;
-    8) firmware_build_dir="build-diagnostic-controls-cv" ;;
-    9) firmware_build_dir="build-diagnostic-usb" ;;
-    *)
-        echo "DIAGNOSTIC must be 0 (Karma looper), 1, 2, 3, 5, 6, 7 (SDRAM test), 8, or 9." >&2
-        exit 2
-        ;;
-esac
+firmware_build_dir="build"
 firmware="$repo_root/firmware/$firmware_build_dir/Karma.bin"
 
 if [[ -z "$mount_path" ]]; then

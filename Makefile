@@ -3,32 +3,6 @@ AURORA_SDK_DIR ?= lib/Aurora-SDK
 GCC_PATH ?= /Library/DaisyToolchain/0.1.2/arm/bin
 BUILD_DIR ?= build
 CONFIG ?= Release
-DIAGNOSTIC ?= 0
-
-DIAGNOSTIC_BUILD_DIR := build
-ifeq ($(DIAGNOSTIC),0)
-DIAGNOSTIC_BUILD_DIR := build
-else ifeq ($(DIAGNOSTIC),1)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-pass
-else ifeq ($(DIAGNOSTIC),2)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-tone
-else ifeq ($(DIAGNOSTIC),3)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-boost
-else ifeq ($(DIAGNOSTIC),5)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-controls
-else ifeq ($(DIAGNOSTIC),6)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-8x
-else ifeq ($(DIAGNOSTIC),7)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-sdram
-else ifeq ($(DIAGNOSTIC),8)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-controls-cv
-else ifeq ($(DIAGNOSTIC),9)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-usb
-else ifeq ($(DIAGNOSTIC),10)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-playback
-else ifeq ($(DIAGNOSTIC),11)
-DIAGNOSTIC_BUILD_DIR := build-diagnostic-record-audit
-endif
 
 .PHONY: all vst aurora libdaisy test clean
 
@@ -44,7 +18,7 @@ libdaisy:
 	$(MAKE) -C "$(AURORA_SDK_DIR)/libs/DaisySP" GCC_PATH="$(GCC_PATH)"
 
 aurora: libdaisy
-	$(MAKE) -C firmware AURORA_SDK_DIR="$(abspath $(AURORA_SDK_DIR))" GCC_PATH="$(GCC_PATH)" DIAGNOSTIC="$(DIAGNOSTIC)" BUILD_DIR="$(DIAGNOSTIC_BUILD_DIR)"
+	$(MAKE) -C firmware AURORA_SDK_DIR="$(abspath $(AURORA_SDK_DIR))" GCC_PATH="$(GCC_PATH)" BUILD_DIR="build"
 
 test:
 	mkdir -p "$(BUILD_DIR)/tests"

@@ -4,23 +4,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 aurora_sdk_dir="${AURORA_SDK_DIR:-$repo_root/lib/Aurora-SDK}"
 dfu_timeout="${DFU_TIMEOUT_SECONDS:-120}"
-case "${DIAGNOSTIC:-0}" in
-    0) firmware_build_dir="build" ;;
-    1) firmware_build_dir="build-diagnostic-pass" ;;
-    2) firmware_build_dir="build-diagnostic-tone" ;;
-    3) firmware_build_dir="build-diagnostic-boost" ;;
-    5) firmware_build_dir="build-diagnostic-controls" ;;
-    6) firmware_build_dir="build-diagnostic-8x" ;;
-    7) firmware_build_dir="build-diagnostic-sdram" ;;
-    8) firmware_build_dir="build-diagnostic-controls-cv" ;;
-    9) firmware_build_dir="build-diagnostic-usb" ;;
-    10) firmware_build_dir="build-diagnostic-playback" ;;
-    11) firmware_build_dir="build-diagnostic-record-audit" ;;
-    *)
-        echo "DIAGNOSTIC must be 0 (Karma looper), 1, 2, 3, 5, 6, 7 (SDRAM test), 8, 9, 10 (playback), or 11 (record audit)." >&2
-        exit 2
-        ;;
-esac
+firmware_build_dir="build"
 dfu_candidates=()
 if [[ -n "${DFU_UTIL:-}" ]]; then
     dfu_candidates+=("$DFU_UTIL")
@@ -60,11 +44,7 @@ if [[ "$aurora_sdk_dir" != /* ]]; then
     aurora_sdk_dir="$repo_root/$aurora_sdk_dir"
 fi
 
-if [[ "${DIAGNOSTIC:-0}" == 0 ]]; then
-    echo "Building Karma stereo looper firmware..."
-else
-    echo "Building Karma diagnostic ${DIAGNOSTIC}..."
-fi
+echo "Building Karma stereo looper firmware..."
 "$repo_root/scripts/build-aurora.sh"
 
 firmware="$repo_root/firmware/$firmware_build_dir/Karma.bin"

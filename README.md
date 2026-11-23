@@ -155,8 +155,10 @@ enabled intentionally; keep Reflect's blend at zero and Atmosphere fully
 counter-clockwise to hear the clean path. Root-cause diagnosis is deferred
 until after playback behavior is stable. A more recent observation isolates
 the crackles to loop playback: the analog oscillator passes cleanly, and the
-crackles recur at the same recorded positions across takes. Diagnostic 10
-targets the playback output without changing it.
+crackles recur at the same recorded positions across takes. The recording-head
+write position was corrected to advance in sample units using double
+precision, and a regression test checks every sample in a four-second capture.
+The corrected firmware was reported clean on hardware.
 
 Press and release **Shift** to cycle modes, regardless of how long it is held.
 If a Shift secondary control, Shift+Reverse recording, or Shift+Freeze full
@@ -176,93 +178,11 @@ while progressively erasing and magenta during a full erase. Neither LED
 indicates USB or persistence status. Input is monitored at unity while
 recording, and the Aurora build does not build or flash the VST.
 
-Optional hardware checks can still be selected with `DIAGNOSTIC`:
-
-```sh
-# Audio callback/input activity
-DIAGNOSTIC=1 ./scripts/flash-aurora-dfu.sh
-
-# 440 Hz tone
-DIAGNOSTIC=2 ./scripts/flash-aurora-dfu.sh
-
-# Right input to both outputs at 4x gain (start mixer low)
-DIAGNOSTIC=3 ./scripts/flash-aurora-dfu.sh
-
-# Mix/Blur knob readings
-DIAGNOSTIC=5 ./scripts/flash-aurora-dfu.sh
-
-# Stereo inputs to outputs at 8x gain (start source and mixer low)
-DIAGNOSTIC=6 ./scripts/flash-aurora-dfu.sh
-
-# SDRAM and callback-block-size diagnostic
-DIAGNOSTIC=7 ./scripts/flash-aurora-dfu.sh
-
-# Mix knob and bipolar CV readings
-DIAGNOSTIC=8 ./scripts/flash-aurora-dfu.sh
-
-# USB mass-storage presence/readiness (connect a drive to Aurora)
-DIAGNOSTIC=9 ./scripts/flash-aurora-dfu.sh
-
-# Full-wet, effects-off looper playback with a discontinuity LED
-DIAGNOSTIC=10 ./scripts/flash-aurora-dfu.sh
-
-# Compare a first recording against the samples written to the loop buffer
-DIAGNOSTIC=11 ./scripts/flash-aurora-dfu.sh
-```
-
-Diagnostics 3 and 6 can clip; start with low source and mixer levels.
-Diagnostic 10 is the playback investigation build: record normally, then play
-back at full wet with Reflect and Atmosphere bypassed. Mix is forced fully wet.
-The Freeze LED is normally green and flashes red when the playback output's
-second sample difference exceeds 0.25 (normalized full scale). This marks a
-sharp waveform change, which can be a click or a legitimate sharp transient;
-it does not alter audio or measure callback timing. Use a steady, low-level
-oscillator, Warp fully counter-clockwise, Time fully clockwise, and Blur near
-1x when comparing the regular and diagnostic builds.
-Diagnostic 11 audits the first recording made into an empty buffer. After
-full-erasing, record the steady oscillator and release Reverse; the build
-stores a reference copy of the input and compares it with the loop buffer's
-sequential samples while playback proceeds. Freeze is blue while waiting or
-auditing, green when every written sample matches the reference, and red if
-any sample differs (including a loop-duration mismatch). It forces full-wet,
-effects-off, 1x playback and uses two additional SDRAM reference buffers. A
-green result means the buffer write matches the captured digital input; it
-does not distinguish an ADC/input artifact from an artifact already present
-in those input samples. The audit exposed precision loss in the normalized
-floating-point recording head at unity speed; the write cursor now advances
-in sample units using double precision. A regression test checks every sample
-in a four-second recording. Hardware testing after flashing the corrected
-build confirmed the playback crackles are gone.
-Diagnostic 7 uses LED 1 green/red for SDRAM pass/fail, and LED 2 blue for
-48-sample blocks, green for 96, or red for another block size. The Freeze LED
-indicates audio callback activity. In diagnostic 8, LED 1 displays Mix knob
-level and LED 2 shows bipolar CV polarity. In diagnostic 9, LEDs 1 and 2 show
-USB device presence and readiness, respectively. Initial hardware testing
-reported diagnostic 7 all green (SDRAM passed, 96-sample blocks, callback
-active) and independent knob/CV readings in diagnostic 8. Diagnostic 9
-initially showed both LEDs red when the drive was connected after flashing;
-reflashing with the drive already connected produced both green LEDs (present
-and ready). Hot-plug was then confirmed: with Aurora running diagnostic 9 and
-no drive, both LEDs were red; connecting the drive changed them to green;
-removing it returned them to red; reconnecting changed them to green again.
-
-To test hot-plug, flash diagnostic 9 with no USB storage device connected.
-Leave Aurora powered and the diagnostic running: LEDs 1 and 2 should start red.
-Connect the drive without resetting or reflashing, then wait several seconds;
-LED 1 should turn green when it is detected and LED 2 green when it is ready.
-Unplug and reconnect the drive while leaving Aurora powered. The LEDs should
-return to red and then green/green again. If they only change after a restart,
-hot-plug enumeration is not working. This sequence has now been confirmed on
-the target module.
-
 ### Build and flash quick start
 
 Build without flashing with `./scripts/build-aurora.sh`. To build and flash the
-normal looper, run `./scripts/flash-aurora-dfu.sh`; for a diagnostic, prefix it
-with its selector, e.g. `DIAGNOSTIC=10` for playback or `DIAGNOSTIC=11` for the
-record audit. To build without flashing, run
-`DIAGNOSTIC=11 ./scripts/build-aurora.sh`. The flash script builds first, then
-waits for the module's Daisy bootloader.
+looper, run `./scripts/flash-aurora-dfu.sh`. The flash script builds first,
+then waits for the module's Daisy bootloader.
 
 The flash script uses the Daisy bootloader (`0483:df11`), not STM32 ROM DFU.
 Keep the Daisy connected to the computer's USB device port, restart with RESET,
@@ -329,7 +249,7 @@ and Daisy/libDaisy.
 
 ## Status
 
-Phase 0 diagnostics and Phase 1 stereo looper were hardware-tested. Phase 2
+Phase 0 hardware checks and Phase 1 stereo looper were hardware-tested. Phase 2
 mode selection, per-channel controls, loop-window/speed controls, and Shift
 transport gestures are implemented and covered by portable tests; Phase 3
 effects are implemented, with Atmosphere heard on hardware and Reflect still

@@ -131,7 +131,7 @@ Each channel's restart pulse is independent of the steady mode indicators:
 LED 2 flashes green at an L loop restart, and LED 3 flashes blue at an R loop
 restart.
 
-**Clean-playback diagnostic:** With Reflect bypassed, the audio path has no
+**Clean playback path:** With Reflect bypassed, the audio path has no
 bit reduction, waveshaper, saturation, or other intentional distortion.
 Investigation found
 two possible gain-boost sources in the previous implementation: equal-power
@@ -242,32 +242,15 @@ parameter behavior alongside firmware builds.
 * Verify whether USB mass storage can be enumerated on the target hardware.
   The Aurora SDK exposes USB-host/FatFS support, but the board connection and
   startup sequence must be confirmed on the actual module.
-* `DIAGNOSTIC=7 ./scripts/flash-aurora-dfu.sh` runs the Phase 0 SDRAM test. It
-  initializes SDRAM, writes and verifies two patterns across the 15.36 MB
-  stereo-buffer region, clears it, and indicates the callback block size.
-  `DIAGNOSTIC=8` shows the Mix knob and bipolar CV separately; and
-  `DIAGNOSTIC=9` services USB-host enumeration and shows device presence and
-  readiness separately. The unparameterized flash script now builds the Phase
-  1 stereo looper. See the README for LED meanings and DFU commands.
-* Initial hardware results: diagnostic 7 showed all three LEDs green. This
-  indicates SDRAM test pass, a 96-sample audio block, and an active audio
-  callback. In diagnostic 8, the Mix knob changed LED 1 independently, while
-  CV at the Mix jack changed LED 2 independently; the SDK readings are
-  separate, so knob/CV composition must be implemented explicitly in Karma.
-  Diagnostic 9 initially showed LEDs 1 and 2 red when the USB drive was
-  connected after flashing. Reflashing diagnostic 9 with the drive already
-  connected resulted in both LEDs green (device present and ready). USB-host
-  hot-plug was also verified: with diagnostic 9 running and no drive, both LEDs
-  were red; connecting the drive changed both to green; removing it returned
-  both to red; reconnecting changed them to green again.
+* SDRAM initialization and memory integrity, the 96-sample callback size,
+  separate knob/CV readings, USB-host startup and hot-plug, and stereo
+  pass-through routing were checked on the target hardware.
 * Stereo pass-through audio was confirmed on hardware. The user reported
   signal from left input to left output, left input to right output, and right
   input to right output. These observed routes are accepted as the Phase 0
   pass-through result.
 
-**Exit check:** the SDRAM test passes on the target module, the audio callback
-block size and knob/CV behavior are recorded, and USB-host availability is
-verified on the target revision. SDRAM passed, the callback reports 96 samples,
+**Exit check:** hardware checks recorded SDRAM integrity, a 96-sample callback,
 knob/CV readings are independent, USB mass-storage works both at startup and
 through hot-plug, and pass-through audio was confirmed on left-to-left,
 left-to-right, and right-to-right routes. Phase 0 is complete; proceed to the
