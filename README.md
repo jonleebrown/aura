@@ -110,10 +110,14 @@ control) schedules volume cuts, sample-rate reduction, white or pink noise,
 and short repeat/stutter events. Four slow
 LFOs modulate the event probabilities from the shared Drop Out baseline; set
 Drop Out fully counter-clockwise for bypass. Hold Shift and move Drop Out to
-adjust event duration. At 1× speed, repeat events select a 10-500 ms slice
-immediately before the playhead. The slice length scales inversely with
-playback speed, up to a 2-second cap; it repeats four times while the playhead
-pauses, then playback resumes. Drop Out events are cancelled during
+adjust event duration as a proportion of the active loop window. At minimum
+Shift+Drop Out, Noise, Level Drop, and Sample Reduction target 10 ms regardless
+of loop-window length. Turning it up grows the target smoothly toward the
+active loop-window length, with randomized variation increasing along the
+range. Stutter uses the same loop-relative scale, split into four repeats;
+each slice has a 10 ms minimum and 2-second cap. Playback speed does not change
+event duration. The playhead pauses for the repeats, then playback resumes.
+Drop Out events are cancelled during
 record and erase. Effects are not applied to input monitoring or written into
 the loop buffer.
 
@@ -154,12 +158,14 @@ the crackles to loop playback: the analog oscillator passes cleanly, and the
 crackles recur at the same recorded positions across takes. Diagnostic 10
 targets the playback output without changing it.
 
-Tap **Shift** (hold for less than 300 ms, without changing a secondary control)
-to cycle modes. The firmware starts in LR to retain Phase 1 stereo behavior;
-the cycle is LR → L → R → LR. LED 1 green indicates L, LED 2 blue indicates R,
-and both indicate LR. Hold Shift with Mix to pan; Shift+Reverse records at 1x
-from the start of the buffer and sets the working-loop duration to the held
-duration (up to 40 seconds).
+Press and release **Shift** to cycle modes, regardless of how long it is held.
+If a Shift secondary control, Shift+Reverse recording, or Shift+Freeze full
+erase is engaged during the hold, its function runs and the channel mode does
+not change. The firmware starts in LR to retain Phase 1 stereo behavior; the
+cycle is LR → L → R → LR. LED 1 green indicates L, LED 4 blue indicates R, and
+both indicate LR. Hold Shift with Mix to pan; Shift+Reverse records at 1x from
+the start of the buffer and sets the working-loop duration to the held duration
+(up to 40 seconds).
 Shift+Freeze on the button starts a bounded, incremental full-buffer erase;
 the loop component is cut immediately, while any dry mix remains audible. The
 full erase clears both channels, stops playback, and removes pending loop-end

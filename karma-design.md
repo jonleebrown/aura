@@ -29,7 +29,7 @@ The Daisy Seed provides 64 MB of external SDRAM. Two independent circular buffer
 ## 2. Channel Control Modes & UI State Machine
 
 ### 2.1 Channel Selection (`Shift` Tap)
-* **Trigger:** Falling edge (release) of the `Shift` button, **only if** held for `< 300ms` and no secondary Shift+Control parameter was modified during the press.
+* **Trigger:** Every `Shift` release cycles the channel mode unless a Shift secondary action, Shift+Reverse recording, or Shift+Freeze full erase was engaged during that hold. Hold duration does not affect the cycle.
 * **Cycle Order:** `L Mode` $\rightarrow$ `R Mode` $\rightarrow$ `LR Mode` $\rightarrow$ `L Mode`
 * **LED Feedback:**
   * **L Mode:** LED 1 lit **Green**.
@@ -74,7 +74,7 @@ to `[0.0, 1.0]` and CV values are bipolar `[-1.0, 1.0]`.
 
 | Combination | Function | Behavior |
 | :--- | :--- | :--- |
-| **Shift + Drop Out** | Dropout Duration | Sets a proportional duration ratio (`[0.001, 1.0]`) of the active loop, with randomized duration from 0.5x to 1.5x that ratio, bounded by the loop length and a 5 ms minimum where the loop permits. |
+| **Shift + Drop Out** | Dropout Duration | After moving the knob while Shift is held, its absolute position smoothly maps event duration from 10 ms at minimum to the active loop-window length at maximum. Random duration variation grows from zero at minimum to ±50% at maximum, bounded by the active window. Shift alone preserves the current duration. |
 | **Shift + Degrade** | Degrade Wet/Dry Mix | Linear crossfade (`0%` to `100%`) blending clean and degraded loop audio. Defaults to `100%` wet. Moving the knob while Shift is held sets the blend; pressing Shift alone leaves the mix unchanged. The Degrade amount retains its unshifted setting. |
 | **Shift + Warp or Time** | Window Transition Mode | Moving either control while Shift is held toggles the shared mode between **Smooth** and **Jump** once per Shift hold. The Warp and Time values do not change during this gesture. Smooth slews the read window and produces tape-style pitch movement. Jump fades the wet signal out for 5 ms, moves directly to the new window, then fades back in over 5 ms to avoid clicks. |
 | **Shift + Blur** | Speed Mode Toggle | Turning the physical Blur knob while Shift is held toggles between **Continuous** and **Quantized** speed modes once per Shift hold. The selected mode stays latched after Shift is released, while Blur controls speed normally. Continuous mode ranges from `-2x` at minimum through `0x` at noon to `+2x` at maximum, with `-1x` and `+1x` approximately at 9 and 3 o'clock. Quantized mode steps through `-2, -1.5, -1.25, -1, -0.5, -0.25, 0.01, 0.25, 0.5, 1, 1.25, 1.5, 2x` across the knob travel. |
@@ -177,8 +177,7 @@ intentional effect with a clean zero-depth bypass.
 The Drop Out engine runs independently per channel to allow asynchronous stereo glitching. Four LFOs use independently randomized periods between 20 and 40 seconds. The Drop Out knob supplies a shared baseline, split evenly among the four effects; each LFO scales its effect's baseline probability, so a zero baseline always disables that effect. Combined event probability is capped at 90%.
 
 1. **Scheduler:** Evaluates event opportunities every `15ms` to `100ms`, with the interval shortening as **Drop Out** increases. LFO-scaled probabilities set the chance and weighted selection of the event type.
-2. **Duration Calculation:** When triggered, event length is randomized around the target duration:
-   $$\text{Event Samples} = \text{WorkingBufferLength} \times \text{Ratio}_{\text{Shift+Drop Out}} \times \text{Rand}(0.5, 1.5)$$
+2. **Duration Calculation:** The Shift+Drop Out control maps smoothly from a 10 ms minimum for Noise, Level Drop, and Sample Reduction to the active playback-window duration. Random variation grows with the control from 0% to ±50%, and durations are clamped to the active window. Playback speed does not affect event duration. Stutter uses the same loop-relative scale split over four slices, with a 10 ms minimum and 2-second cap per slice.
 3. **Transformation Selection:** On trigger, randomly activate **one** of the following transformations, crossfading in/out over `3ms` to prevent clicks:
    * **Level Drop:** Attenuate playback gain to `0.0f` (mute) or `0.25f` (`-12 dB`).
    * **Sample Rate Reduction (SRR):** Sample-and-hold playback output for $N$ ticks (randomized between `4x` and `32x` decimation).
@@ -370,11 +369,13 @@ accepted as the clean baseline.
 * Implemented Drop Out probability modulation for level drops, sample-rate
   reduction, white/pink noise, and four-cycle repeat/stutter events. Four
   independently randomized 20-40 second LFOs scale effect probabilities.
-  Repeat slices span 10-500 ms at 1x based on the Shift+Drop Out duration
-  control, scale inversely with absolute playback speed, and cap at 2 seconds.
-  They play from recent loop history while the playback head is held, then
-  normal playback resumes. Events are independently randomized per channel
-  and bounded by the active loop (up to 40 seconds).
+  All event durations use the active loop window and Shift+Drop Out duration,
+  independent of playback speed, with a 10 ms minimum. Stutter uses that same
+  total duration for four repeats; each captured slice has a 10 ms minimum and
+  2-second cap. Slices play
+  from recent loop history while the playback head is held, then normal playback
+  resumes. Events are independently randomized per channel and bounded by the
+  active loop (up to 40 seconds).
 * Effects process loop playback only. Events are cancelled during recording
   and erasing and when Drop Out is returned to zero.
 * Added portable tests for bypass behavior, deterministic scheduling,

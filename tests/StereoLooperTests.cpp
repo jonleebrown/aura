@@ -662,9 +662,9 @@ void TestRepeatMicroLoopDurationRange()
                 {
                     const std::size_t expectedLength = duration == 0.0f
                                                      ? 480
-                                                     : 24000;
+                                                     : 12000;
                     Require(effects.RepeatLengthSamples() == expectedLength,
-                            "repeat micro-loop length maps from 5 ms to 500 ms");
+                            "repeat slice is one quarter of the loop-relative event duration");
                     Require(result.speed == 0.0f,
                             "repeat event holds the playback head in place");
                     Require(effects.RemainingEventSamples()
@@ -682,7 +682,7 @@ void TestRepeatMicroLoopDurationRange()
 void TestRepeatCyclesCapturedLoopHistory()
 {
     using Effects = aurora::dsp::KarmaEffects;
-    constexpr std::size_t repeatLength = 240;
+    constexpr std::size_t repeatLength = 480;
     constexpr std::size_t repeatEventLength = repeatLength * 4;
     std::vector<float> repeatHistory(24000);
     bool verified = false;

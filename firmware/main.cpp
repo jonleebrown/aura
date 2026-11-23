@@ -46,9 +46,8 @@ volatile bool clear_loop_led_pulses = false;
 bool control_state_initialized = false;
 float filtered_control_inputs[aurora::dsp::KarmaControlState::ControlCount]{};
 bool control_input_filter_initialized = false;
-uint32_t shift_held_samples = 0;
 bool shift_consumed = false;
-float shift_start_controls[aurora::dsp::KarmaControlState::ControlCount]{};
+bool shift_button_was_pressed = false;
 bool shift_record_was_active = false;
 uint32_t shift_record_samples = 0;
 bool empty_buffer_record_was_active = false;
@@ -650,32 +649,14 @@ void AudioCallback(AudioHandle::InputBuffer input,
     }
 
     const bool shiftHeld = hardware.GetButton(SW_SHIFT).Pressed();
-    if (hardware.GetButton(SW_SHIFT).RisingEdge())
-    {
-        shift_held_samples = 0;
+    if (shiftHeld && !shift_button_was_pressed)
         shift_consumed = false;
-        for (std::size_t control = 0; control < ControlState::ControlCount; ++control)
-            shift_start_controls[control] = controlInputs[control];
-    }
 
     const bool recordHeld = hardware.GetButton(SW_REVERSE).Pressed()
                          || hardware.GetGateState(GATE_REVERSE);
     const bool eraseHeld = hardware.GetButton(SW_FREEZE).Pressed()
                         || hardware.GetGateState(GATE_FREEZE);
     const bool fullErase = shiftHeld && hardware.GetButton(SW_FREEZE).Pressed();
-    bool shiftedControlChanged = false;
-    if (shiftHeld)
-    {
-        shift_held_samples += static_cast<uint32_t>(frameCount);
-        for (std::size_t control = ControlState::Warp;
-             control <= ControlState::Mix;
-             ++control)
-        {
-            if (std::fabs(controlInputs[control] - shift_start_controls[control]) > 0.02f)
-                shiftedControlChanged = true;
-        }
-    }
-
     const bool shiftRecordActive = shiftHeld && recordHeld;
     const bool emptyBufferRecordActive = workingLoopSamples == 0 && recordHeld;
     const bool wasEmptyBufferRecord = empty_buffer_record_was_active;
@@ -724,16 +705,18 @@ void AudioCallback(AudioHandle::InputBuffer input,
     controlState.Update(controlInputs,
                         shiftHeld,
                         hardware.GetKnobValue(KNOB_BLUR));
-    if (shiftedControlChanged || fullErase)
+    if (controlState.ShiftActionTriggeredThisUpdate()
+        || shiftRecordActive
+        || fullErase)
         shift_consumed = true;
 
-    if (!shiftHeld && hardware.GetButton(SW_SHIFT).FallingEdge())
+    if (!shiftHeld && shift_button_was_pressed)
     {
-        if (shift_held_samples < 14400 && !shift_consumed)
+        if (!shift_consumed)
             controlState.CycleMode(controlInputs);
-        shift_held_samples = 0;
         shift_consumed = false;
     }
+    shift_button_was_pressed = shiftHeld;
     UpdateModeIndicator();
 
     const bool leftActive = controlState.IsChannelActive(0);

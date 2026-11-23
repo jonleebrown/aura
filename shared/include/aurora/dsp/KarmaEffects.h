@@ -121,8 +121,7 @@ class KarmaEffects
                 ScheduleNext(amount,
                              parameters.loopSamples,
                              parameters.dropoutProbabilities,
-                             Clamp(parameters.probabilityModulationDepth),
-                             speed);
+                             Clamp(parameters.probabilityModulationDepth));
             else
                 --schedulerSamples_;
         }
@@ -209,7 +208,8 @@ class KarmaEffects
 
   private:
     static constexpr uint32_t sampleRate_ = 48000;
-    static constexpr std::size_t minimumEventSamples_ = 240;
+    static constexpr std::size_t minimumEventSamples_ = sampleRate_ / 100;
+    static constexpr std::size_t minimumRepeatSliceSamples_ = sampleRate_ / 100;
     static constexpr std::size_t fadeSamples_ = 144;
     static constexpr std::size_t maximumRepeatSamples_ = sampleRate_ * 2;
     static constexpr std::size_t repeatCount_ = 4;
@@ -262,8 +262,7 @@ class KarmaEffects
     void ScheduleNext(float amount,
                       std::size_t loopSamples,
                       const float (&probabilities)[DropoutProbabilityCount],
-                      float modulationDepth,
-                      float speed)
+                      float modulationDepth)
     {
         schedulerSamples_ = static_cast<std::size_t>(
             4800.0f - amount * 4080.0f);
@@ -299,15 +298,11 @@ class KarmaEffects
         {
             if (historySamples_ == 0)
                 return;
-            const float baseDurationMs =
-                10.0f + Clamp(currentDuration_) * 490.0f;
-            const float speedMagnitude = std::fabs(speed);
-            const float speedScale = 1.0f / std::fmax(speedMagnitude, 0.01f);
-            const std::size_t requested = static_cast<std::size_t>(
-                baseDurationMs * speedScale * static_cast<float>(sampleRate_)
-                    / 1000.0f
-                + 0.5f);
-            repeatLengthSamples_ = requested;
+            const std::size_t eventDuration = EventDurationSamples(
+                boundedLoop,
+                minimumRepeatSliceSamples_ * repeatCount_);
+            repeatLengthSamples_ = (eventDuration + repeatCount_ - 1)
+                                 / repeatCount_;
             if (repeatLengthSamples_ > maximumRepeatSamples_)
                 repeatLengthSamples_ = maximumRepeatSamples_;
             if (repeatLengthSamples_ > boundedLoop)
@@ -326,17 +321,8 @@ class KarmaEffects
         }
         else
         {
-            const float durationRatio = 0.001f + Clamp(currentDuration_) * 0.999f;
-            const float durationJitter = 0.5f + RandomUnit();
-            const float requested = static_cast<float>(boundedLoop)
-                                  * durationRatio * durationJitter;
-            eventSamples_ = static_cast<std::size_t>(requested);
-            if (eventSamples_ < minimumEventSamples_)
-                eventSamples_ = boundedLoop < minimumEventSamples_
-                              ? boundedLoop
-                              : minimumEventSamples_;
-            if (eventSamples_ > boundedLoop)
-                eventSamples_ = boundedLoop;
+            eventSamples_ = EventDurationSamples(boundedLoop,
+                                                  minimumEventSamples_);
             if (eventSamples_ == 0)
                 return;
 
@@ -360,6 +346,29 @@ class KarmaEffects
         }
         eventPosition_ = 0;
         ++eventCount_;
+    }
+
+    std::size_t EventDurationSamples(std::size_t loopSamples,
+                                     std::size_t minimumSamples)
+    {
+        const float durationControl = Clamp(currentDuration_);
+        const std::size_t lowerBound = loopSamples < minimumSamples
+                                     ? loopSamples
+                                     : minimumSamples;
+        const float durationRange = static_cast<float>(loopSamples
+                                                       - lowerBound);
+        const float targetDuration = static_cast<float>(lowerBound)
+                                   + durationControl * durationRange;
+        const float jitterDepth = durationControl * 0.5f;
+        const float durationJitter = 1.0f
+            + (RandomUnit() * 2.0f - 1.0f) * jitterDepth;
+        const float requested = targetDuration * durationJitter;
+        std::size_t duration = static_cast<std::size_t>(requested + 0.5f);
+        if (duration < lowerBound)
+            duration = lowerBound;
+        if (duration > loopSamples)
+            duration = loopSamples;
+        return duration;
     }
 
     void PushHistory(float sample)

@@ -109,6 +109,7 @@ class KarmaControlState
                 bool shiftHeld,
                 float blurKnobValue = -1.0f)
     {
+        shiftActionTriggeredThisUpdate_ = false;
         const float physicalBlur = blurKnobValue < 0.0f
                                 ? Clamp(inputs[Blur])
                                 : Clamp(blurKnobValue);
@@ -138,6 +139,7 @@ class KarmaControlState
                               ? WindowUpdateMode::Jump
                               : WindowUpdateMode::Smooth;
             shiftWindowModeToggled_ = true;
+            shiftActionTriggeredThisUpdate_ = true;
         }
 
         if (shiftHeld && !shiftBlurSpeedModeToggled_
@@ -147,6 +149,7 @@ class KarmaControlState
                            ? BlurSpeedMode::Quantized
                            : BlurSpeedMode::Continuous;
             shiftBlurSpeedModeToggled_ = true;
+            shiftActionTriggeredThisUpdate_ = true;
         }
 
         if (mode_ == Mode::Both)
@@ -205,6 +208,10 @@ class KarmaControlState
     Mode GetMode() const { return mode_; }
     WindowUpdateMode GetWindowUpdateMode() const { return windowUpdateMode_; }
     BlurSpeedMode GetBlurSpeedMode() const { return blurSpeedMode_; }
+    bool ShiftActionTriggeredThisUpdate() const
+    {
+        return shiftActionTriggeredThisUpdate_;
+    }
     bool IsChannelActive(std::size_t channel) const
     {
         return channel == 0 ? mode_ != Mode::Right
@@ -246,12 +253,25 @@ class KarmaControlState
             if (control == Reflect)
             {
                 if (std::fabs(delta) > 0.02f)
+                {
                     target.crushMix = physicalValue;
+                    shiftActionTriggeredThisUpdate_ = true;
+                }
             }
             else if (control == Atmosphere)
-                target.glitchDuration = Clamp(base.glitchDuration + delta);
+            {
+                if (std::fabs(delta) > 0.02f)
+                {
+                    target.glitchDuration = physicalValue;
+                    shiftActionTriggeredThisUpdate_ = true;
+                }
+            }
             else
+            {
                 target.pan = Clamp(base.pan + delta);
+                if (std::fabs(delta) > 0.02f)
+                    shiftActionTriggeredThisUpdate_ = true;
+            }
         }
     }
 
@@ -265,12 +285,25 @@ class KarmaControlState
         if (control == Reflect)
         {
             if (std::fabs(delta) > 0.02f)
+            {
                 target.crushMix = physicalValue;
+                shiftActionTriggeredThisUpdate_ = true;
+            }
         }
         else if (control == Atmosphere)
-            target.glitchDuration = Clamp(base.glitchDuration + delta);
+        {
+            if (std::fabs(delta) > 0.02f)
+            {
+                target.glitchDuration = physicalValue;
+                shiftActionTriggeredThisUpdate_ = true;
+            }
+        }
         else
+        {
             target.pan = Clamp(base.pan + delta);
+            if (std::fabs(delta) > 0.02f)
+                shiftActionTriggeredThisUpdate_ = true;
+        }
     }
 
     Channel channels_[2]{};
@@ -281,6 +314,7 @@ class KarmaControlState
     Mode mode_ = Mode::Both;
     bool initialized_ = false;
     bool shiftWasHeld_ = false;
+    bool shiftActionTriggeredThisUpdate_ = false;
     bool shiftWindowModeToggled_ = false;
     WindowUpdateMode windowUpdateMode_ = WindowUpdateMode::Smooth;
     bool shiftBlurSpeedModeToggled_ = false;
