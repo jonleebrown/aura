@@ -443,10 +443,10 @@ Level at zero, the loop is reprocessed and replaced rather than accumulated,
 so repeated passes may progressively compound Degrade and other effects. L
 and R write only to their selected channel; LR writes both channels over the
 same held time span using each channel's own playback state. L/R/LR selection
-does not change the monitoring Mix. Because Mix is proposed as Loop Level on the L/R
-page, the live monitoring Mix needs a new assignment (for example, on a
-utility/monitor page). Shift+Mix panning is also displaced; retain panning
-only if it receives a clear new control assignment.
+does not change the monitoring Mix. Because Mix is proposed as Loop Level on
+the L/R page, the live monitoring Mix needs a new assignment (for example, on
+a utility/monitor page). Panning is not needed: preserve the two independent
+channels and their hard L-to-L, R-to-R output routing, with no pan control.
 
 Pitch is a new parameter for pitch-independent stretching and should be
 implemented with that mode. In varispeed mode, playback pitch remains linked
@@ -455,9 +455,15 @@ to Speed unless a separate pitch-shift mode is explicitly designed.
 ### FX control page
 
 Move Drop Out and Degrade controls into a dedicated FX page/bank so their
-parameters can be edited independently per channel. Keep channel selection
-(L, R, LR) separate from the selected control page: opening the FX page should
-not change which channels are playing or targeted by Reverse. The earlier
+parameters can be edited independently per channel. Add separate overdrive
+amounts for the external-input and loop-return write paths, so either source
+can be driven before its Input Level or Loop Level is applied. This allows
+recording a driven input, reprocessing and recording the existing loop, or
+blending both. Keep these write-path drive stages distinct from live monitor
+level and make it clear when their sound is being written into the buffer.
+Keep channel selection (L, R, LR) separate from the selected control page:
+opening the FX page should not change which channels are playing or targeted
+by Reverse. The earlier
 proposal split Warp, Blur, and Mix across the L FX controls and Time, Reflect,
 and Atmosphere across R FX controls; the new six-control performance page
 replaces that split, so the FX page's knob assignments and navigation need to
@@ -466,13 +472,12 @@ Degrade parameters need independent per-channel values.
 
 ### Recording the effected signal
 
-FX overdubbing uses the Loop Level source in the write path. Decide whether
-the external input can also pass through selected effects before writing, or
-whether effects apply only to the existing loop return. These are separate
-signal paths. Apply each effect once to the signal being written; avoid
-accidentally processing it again on the monitor path while Reverse is held.
-Respect L/R/LR target selection and LR shared press/release timing, and verify
-that an effect event or its state cannot leak between channels.
+FX overdubbing uses the source-specific drive stages on the write path. Decide
+which other effects, such as Degrade or Drop Out, are also printed into the
+buffer. Apply each effect once to the signal being written; avoid accidentally
+processing it again on the monitor path while Reverse is held. Respect L/R/LR
+target selection and LR shared press/release timing, and verify that an effect
+event or its state cannot leak between channels.
 
 ### Pickup when changing control layers
 
@@ -521,8 +526,9 @@ firmware until a hardware prototype meets those constraints.
    endpoints, monitoring independence, channel targeting, and headroom behavior.
 3. Add effected-signal overdubbing, then measure and expose compensation only
    for routes where a repeatable delay exists.
-4. Finalize the FX page assignments and add independent Drop Out controls
-   first; add separate Degrade controls only after the interaction is clear.
+4. Finalize the FX page assignments, including the two write-path drive
+   amounts; add independent Drop Out controls first, then separate Degrade
+   controls as needed.
 5. Build a standalone stretch prototype and compare Bungee and Signalsmith on
    real recorded material before integrating one into the looper.
 
