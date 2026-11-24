@@ -412,132 +412,99 @@ same USB device being diagnosed.
 **Exit check:** the documented design is usable on hardware, with known
 limitations and supported WAV/media behavior recorded here.
 
-## v0.2 Goal: Expressive Overdubbing and Time Manipulation
+## v0.2 Goal: Bungee Playback and Overdub Controls
 
-This is a planning goal; the behavior below is not implemented yet. It builds
-on the existing L/R/LR channel selection and keeps input monitoring, buffer
-writing, and playback effects as distinct signal paths.
+This is a planning goal; no implementation is included yet. The first hardware
+prototype should isolate the playback engine and new control mapping from the
+existing effects.
 
-### L/R performance controls and overdub levels
+### Initial prototype sequence
 
-Move effect editing to its own control page/bank. This frees the L/R channel
-page for six per-channel controls. A proposed physical mapping is Warp/Start,
-Time/Length, Blur/Speed, Reflect/Pitch, Atmosphere/Input Level, and Mix/Loop
-Level. These assignments are a starting point and can be revised during
-hardware use.
+1. Disconnect Degrade and Drop Out from playback and recording paths. Keep
+their implementations in the project for later, but make the first comparison
+clean and deterministic.
+2. Replace the current playback/read-head algorithm with Bungee's granular
+stretcher while retaining Karma's circular buffers, recording, overdub writes,
+erase, loop-duration capture, transport, and channel modes. Bungee is a
+stretch/playback engine, not a replacement for those looper functions.
+3. Keep Start, Length, and Speed mappings as they are. Assign Reflect to Pitch,
+Mix to Input Level, and Atmosphere to Loop Level. Input Level and Loop Level
+have no Shift behavior in this prototype.
 
-Input Level and Loop Level set the sources written into the selected channel
-while Reverse is held. Input Level controls the external input contribution;
-Loop Level controls the existing loop return, optionally after its selected
-effects. A default of Loop Level at zero and Input Level at unity preserves
-the current punch-in behavior. Raising Loop Level adds the loop return to the
-write signal; lowering Input Level removes external input. These are record
-gains, separate from live monitoring Mix.
+### Bungee integration boundary
 
-Treat them as source gains: `write = input * input_level + loop_return *
-loop_level`. This gives direct control of both sources, but both at unity can
-sum correlated signals above full scale. Decide whether that extra gain is
-intentional or whether the gains should be normalized; document the choice and
-test repeated passes for level growth. With Loop Level at maximum and Input
-Level at zero, the loop is reprocessed and replaced rather than accumulated,
-so repeated passes may progressively compound Degrade and other effects. L
-and R write only to their selected channel; LR writes both channels over the
-same held time span using each channel's own playback state. L/R/LR selection
-does not change the monitoring Mix. Because Mix is proposed as Loop Level on
-the L/R page, the live monitoring Mix needs a new assignment (for example, on
-a utility/monitor page). Panning is not needed: preserve the two independent
-channels and their hard L-to-L, R-to-R output routing, with no pan control.
+Bungee's granular API lets the caller specify a requested position, speed, and
+pitch for each grain. Karma must provide each requested input chunk from the
+active loop region and consume the synthesized output chunk. The adapter must
+handle loop-window boundaries and circular-buffer seams while preserving the
+current Start and Length range. The official Bungee documentation describes
+the granular mode as supporting arbitrary position changes, reverse playback,
+and scrubbing; its streaming mode is forward-only. [Bungee API and integration notes](https://github.com/bungee-audio-stretch/bungee#integrating-bungee-c-audio-library)
 
-Pitch is a new parameter for pitch-independent stretching and should be
-implemented with that mode. In varispeed mode, playback pitch remains linked
-to Speed unless a separate pitch-shift mode is explicitly designed.
+Keep independent L/R Start, Length, Speed, and Pitch settings. A stereo Bungee
+stretcher shares one grain request across its channels, so use one mono
+stretcher state per Karma channel when their playback positions or rates differ.
+Benchmark the two-channel cost on the STM32H750. Keep all scratch buffers
+bounded and avoid allocation in the audio callback. The repository lists Eigen
+and PFFFT dependencies and an MPL-2.0 license; validate the embedded toolchain
+build and license fit before adding it as a firmware dependency. [Bungee repository](https://github.com/bungee-audio-stretch/bungee)
 
-### FX control page
+Compare the new engine with the existing one at unity speed and neutral pitch
+before removing the old path. Test Start/Length changes, positive and negative
+speed, zero speed, rapid scrubbing, loop wrapping, and independent L/R motion.
+Track callback time, memory use, output latency, and any added delay from
+preroll or grain scheduling. The stretcher's input and output are caller-owned
+at the integration boundary, so test seam handling and buffer lifetime as
+first-class parts of the prototype.
 
-Move Drop Out and Degrade controls into a dedicated FX page/bank so their
-parameters can be edited independently per channel. Add separate overdrive
-amounts for the external-input and loop-return write paths, so either source
-can be driven before its Input Level or Loop Level is applied. This allows
-recording a driven input, reprocessing and recording the existing loop, or
-blending both. Keep these write-path drive stages distinct from live monitor
-level and make it clear when their sound is being written into the buffer.
-Keep channel selection (L, R, LR) separate from the selected control page:
-opening the FX page should not change which channels are playing or targeted
-by Reverse. The earlier
-proposal split Warp, Blur, and Mix across the L FX controls and Time, Reflect,
-and Atmosphere across R FX controls; the new six-control performance page
-replaces that split, so the FX page's knob assignments and navigation need to
-be designed anew. Prioritize independent Drop Out controls, then decide which
-Degrade parameters need independent per-channel values.
+### Initial control mapping
 
-### Recording the effected signal
+| Physical control | Proposed L/R function | Initial behavior |
+| :--- | :--- | :--- |
+| Warp / Start | Start | Keep current mapping and mode behavior. |
+| Time / Length | Length | Keep current mapping and mode behavior. |
+| Blur / Speed | Speed | Keep current continuous/quantized behavior for the prototype. |
+| Reflect / Degrade | Pitch | Add pitch-independent transposition with unity pitch at the knob's neutral point; define the range through listening. |
+| Mix | Input Level | Set the external-input gain in the record/write path. |
+| Atmosphere / Drop Out | Loop Level | Set the existing loop-return gain in the record/write path. |
 
-FX overdubbing uses the source-specific drive stages on the write path. Decide
-which other effects, such as Degrade or Drop Out, are also printed into the
-buffer. Apply each effect once to the signal being written; avoid accidentally
-processing it again on the monitor path while Reverse is held. Respect L/R/LR
-target selection and LR shared press/release timing, and verify that an effect
-event or its state cannot leak between channels.
+With Input Level at unity and Loop Level at zero, Reverse should retain the
+current punch-in behavior. Raising Loop Level adds the loop return to the
+write signal; lowering Input Level removes external input. A provisional write
+formula is `input * input_level + loop_return * loop_level`. Decide whether
+the two gains are independent or normalized, because both at unity can add
+correlated signals above full scale. Bungee expects normalized float samples
+and does not clip them, so define a headroom policy before allowing summed
+write levels outside `[-1, 1]`. Preserve the separate hard L-to-L and R-to-R
+routes; no panning control is needed.
 
-### Pickup when changing control layers
+Mix is currently the live monitoring dry/wet control, so assigning it to
+Input Level displaces that function. Decide where live monitoring Mix belongs
+before implementation, or whether monitor levels should instead follow Input
+Level and Loop Level. Keep record/write gains distinct from monitor gains if
+the prior monitoring behavior is to remain unchanged.
 
-Add soft pickup independently for each physical knob and control context
-(normal, Shift secondary, and any FX control bank). After a layer or channel
-selection changes, keep its stored parameter fixed until the physical knob
-reaches or crosses that parameter's stored control position; then resume
-continuous tracking. Define pickup targets for LR offsets and for controls
-whose physical mapping changes by mode. This prevents releasing Shift or
-switching modes from snapping the unshifted parameter to the knob's current
-position. Mode feedback should also indicate when a control is waiting for
-pickup.
+### Deferred until the baseline works
 
-### Overdub latency compensation
+Keep Degrade, Drop Out, their FX control page, and source-specific input/loop
+overdrive disconnected during the first Bungee comparison. Later, restore FX
+one at a time, decide which effects should be printed into overdubs, and test
+whether separate drive stages should process the incoming input, the loop
+return, or both. The Input Level and Loop Level controls should make those
+write sources independently controllable.
 
-Measure the round-trip delay of the intended overdub route before advancing
-the write position. A fixed sample offset can align a stable external
-output-to-input loop, but it cannot correct frequency-dependent phase shift
-from effects or a time-stretch algorithm. Keep direct-input punch-in at zero
-compensation unless measurement shows it needs adjustment. Validate with an
-impulse or correlation-based loopback measurement, then test alignment across
-speed, direction, and effect settings; make any user trim a bounded sample
-offset rather than assuming one setting fits every signal path.
+Also defer overdub latency compensation until the actual record route is
+measured. A fixed sample offset can align stable external output-to-input
+delay, but will not correct frequency-dependent phase shifts from effects or
+time stretching. Add pickup behavior for the reassigned controls before
+switching between channel/control layers so stored values do not jump.
 
-### Pitch-independent stretch prototype
-
-Prototype a pitch-independent stretch mode while retaining varispeed for
-immediate tape-like pitch changes. Prioritize responsive forward/reverse
-scrubbing, smooth zero-speed behavior, and stable control changes. [Bungee](https://github.com/bungee-audio-stretch/bungee)
-is a promising first candidate: its documented granular API exposes per-grain
-position and pitch, and it supports continuously changing, zero, and negative
-playback speeds. [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch)
-is a useful comparison for quality and resource use, though its project
-documentation says time-stretching sounds best over more modest rate changes
-(about 0.75x–1.5x), while supporting wider pitch shifts. Before selecting
-either library, benchmark stereo CPU load, memory, latency, licensing, and
-control response on the STM32H750. Keep the
-current playback path available as a fallback and do not add a library to the
-firmware until a hardware prototype meets those constraints.
-
-### Suggested implementation order and acceptance checks
-
-1. Specify and measure record-layer pickup behavior, including Shift release
-   and LR offsets.
-2. Implement the Input Level and Loop Level write gains and confirm their
-   endpoints, monitoring independence, channel targeting, and headroom behavior.
-3. Add effected-signal overdubbing, then measure and expose compensation only
-   for routes where a repeatable delay exists.
-4. Finalize the FX page assignments, including the two write-path drive
-   amounts; add independent Drop Out controls first, then separate Degrade
-   controls as needed.
-5. Build a standalone stretch prototype and compare Bungee and Signalsmith on
-   real recorded material before integrating one into the looper.
-
-**v0.2 exit check:** knob-layer and channel changes do not cause parameter
-jumps; Input Level and Loop Level have predictable endpoints and remain
-independent of monitoring Mix; external-input and effected-signal overdubs
-target the selected channels without unintended cross-channel writes;
-compensation is based on measured latency; and any stretch mode maintains the
-desired scrub response within measured CPU, memory, and latency budgets.
+**Initial prototype exit check:** the effects are absent from the active path;
+Bungee matches the existing engine at unity speed and neutral pitch; Start,
+Length, speed, pitch, loop wrapping, and independent L/R motion behave
+predictably; punch-in and the Input/Loop Level endpoints work without
+unintended cross-channel writes or uncontrolled level growth; and the
+STM32H750 meets measured CPU, memory, and latency limits.
 
 ### Initial implementation risks and assumptions
 
