@@ -418,51 +418,61 @@ This is a planning goal; the behavior below is not implemented yet. It builds
 on the existing L/R/LR channel selection and keeps input monitoring, buffer
 writing, and playback effects as distinct signal paths.
 
-### Overdub blend (planned replacement for Shift+Mix pan)
+### L/R performance controls and overdub levels
 
-Replace Shift+Mix panning with an overdub blend control. Keep the unshifted
-Mix knob as the live dry-input versus loop-playback monitoring control. The
-Shift+Mix value affects only what is written into the loop while Reverse is
-held:
+Move effect editing to its own control page/bank. This frees the L/R channel
+page for six per-channel controls. A proposed physical mapping is Warp/Start,
+Time/Length, Blur/Speed, Reflect/Pitch, Atmosphere/Input Level, and Mix/Loop
+Level. These assignments are a starting point and can be revised during
+hardware use.
 
-* **Minimum:** write the external input only. This is the current punch-in
-  behavior: the recorded span is replaced by input audio.
-* **Maximum:** write the loop's existing playback after its enabled effects,
-  with no external input contribution.
-* **Between:** linearly blend external input and the effected loop return.
+Input Level and Loop Level set the sources written into the selected channel
+while Reverse is held. Input Level controls the external input contribution;
+Loop Level controls the existing loop return, optionally after its selected
+effects. A default of Loop Level at zero and Input Level at unity preserves
+the current punch-in behavior. Raising Loop Level adds the loop return to the
+write signal; lowering Input Level removes external input. These are record
+gains, separate from live monitoring Mix.
 
-Treat the shifted value as a `loop-return` weight: `write = input * (1 - w) +
-effected_loop * w`. Do not fold the monitoring Mix into this formula. L and R
-mode write only to their selected channel; LR writes both channels over the
-same held time span, using each channel's own playback state. At the maximum,
-the loop is being reprocessed and replaced rather than accumulated, so repeated
-passes may progressively compound Degrade and other effects. Test for runaway
-gain and unexpected feedback before choosing any limiter or gain policy.
+Treat them as source gains: `write = input * input_level + loop_return *
+loop_level`. This gives direct control of both sources, but both at unity can
+sum correlated signals above full scale. Decide whether that extra gain is
+intentional or whether the gains should be normalized; document the choice and
+test repeated passes for level growth. With Loop Level at maximum and Input
+Level at zero, the loop is reprocessed and replaced rather than accumulated,
+so repeated passes may progressively compound Degrade and other effects. L
+and R write only to their selected channel; LR writes both channels over the
+same held time span using each channel's own playback state. L/R/LR selection
+does not change the monitoring Mix. Because Mix is proposed as Loop Level on the L/R
+page, the live monitoring Mix needs a new assignment (for example, on a
+utility/monitor page). Shift+Mix panning is also displaced; retain panning
+only if it receives a clear new control assignment.
 
-### FX control mode (mapping still to be designed)
+Pitch is a new parameter for pitch-independent stretching and should be
+implemented with that mode. In varispeed mode, playback pitch remains linked
+to Speed unless a separate pitch-shift mode is explicitly designed.
 
-Add an FX mode alongside L, R, and LR. The proposed physical-control split is
-Warp, Blur, and Mix for the left-channel FX controls, and Time, Reflect, and
-Atmosphere for the right-channel FX controls. Initially, prioritize independent
-Drop Out control; decide separately whether Degrade also gets independent
-controls. The exact parameter assigned to each knob, how FX mode is entered
-and exited, and whether it preserves the current L/R/LR selection remain open
-design decisions. Prefer treating FX as a control-bank mode that does not
-change which channels are sounding or being recorded; this avoids mixing up
-control focus with audio-channel selection.
+### FX control page
+
+Move Drop Out and Degrade controls into a dedicated FX page/bank so their
+parameters can be edited independently per channel. Keep channel selection
+(L, R, LR) separate from the selected control page: opening the FX page should
+not change which channels are playing or targeted by Reverse. The earlier
+proposal split Warp, Blur, and Mix across the L FX controls and Time, Reflect,
+and Atmosphere across R FX controls; the new six-control performance page
+replaces that split, so the FX page's knob assignments and navigation need to
+be designed anew. Prioritize independent Drop Out controls, then decide which
+Degrade parameters need independent per-channel values.
 
 ### Recording the effected signal
 
-Add an FX overdub path so Reverse can write the processed loop signal into the
-buffer, in addition to the existing external-input punch-in. Respect L/R/LR
-target selection and the LR shared press/release timing. Apply each effect
-once to the signal being written; avoid accidentally processing it again on
-the monitor path while Reverse is held. Decide whether “effected signal” means
-the effected loop return, external input processed before writing, or both;
-these require different signal paths. Define how the overdub blend selects
-between the chosen sources, and verify that an effect event or its state
-cannot leak from one channel into the other. The maximum loop-return blend
-described above is one form of FX overdubbing, not a separate second blend.
+FX overdubbing uses the Loop Level source in the write path. Decide whether
+the external input can also pass through selected effects before writing, or
+whether effects apply only to the existing loop return. These are separate
+signal paths. Apply each effect once to the signal being written; avoid
+accidentally processing it again on the monitor path while Reverse is held.
+Respect L/R/LR target selection and LR shared press/release timing, and verify
+that an effect event or its state cannot leak between channels.
 
 ### Pickup when changing control layers
 
@@ -507,21 +517,21 @@ firmware until a hardware prototype meets those constraints.
 
 1. Specify and measure record-layer pickup behavior, including Shift release
    and LR offsets.
-2. Implement the overdub blend and confirm its endpoints, monitoring
-   independence, channel targeting, and stable output level.
+2. Implement the Input Level and Loop Level write gains and confirm their
+   endpoints, monitoring independence, channel targeting, and headroom behavior.
 3. Add effected-signal overdubbing, then measure and expose compensation only
    for routes where a repeatable delay exists.
-4. Finalize the FX control-bank mapping and add Drop Out controls first; add
-   separate Degrade controls only after the interaction is clear.
+4. Finalize the FX page assignments and add independent Drop Out controls
+   first; add separate Degrade controls only after the interaction is clear.
 5. Build a standalone stretch prototype and compare Bungee and Signalsmith on
    real recorded material before integrating one into the looper.
 
 **v0.2 exit check:** knob-layer and channel changes do not cause parameter
-jumps; overdub blend endpoints are predictable and independent of monitoring
-Mix; external-input and effected-signal overdubs target the selected channels
-without unintended cross-channel writes; compensation is based on measured
-latency; and any stretch mode maintains the desired scrub response within
-measured CPU, memory, and latency budgets.
+jumps; Input Level and Loop Level have predictable endpoints and remain
+independent of monitoring Mix; external-input and effected-signal overdubs
+target the selected channels without unintended cross-channel writes;
+compensation is based on measured latency; and any stretch mode maintains the
+desired scrub response within measured CPU, memory, and latency budgets.
 
 ### Initial implementation risks and assumptions
 
